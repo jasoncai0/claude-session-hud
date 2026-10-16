@@ -1,0 +1,6 @@
+{
+  "name": "claude-session-hud",
+  "description": "Session HUD mod for Claude Code: rate-limit usage, Codeup MRs and Feishu docs above the prompt",
+  "owner": { "name": "jasoncai0" },
+  "plugins": [{ "name": "session-hud", "source": "./", "description": "Usage bars, Codeup MR rows and the session's Feishu docs above the prompt (Desktop + terminal)" }]
+}

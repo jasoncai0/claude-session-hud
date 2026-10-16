@@ -1,0 +1,153 @@
+{
+  "name": "session-hud",
+  "version": "0.4.3",
+  "description": "One HUD above the prompt: rate-limit usage, Codeup MRs, the session's Feishu docs and Yunxiao deploys; each module switchable, foldable",
+  "author": {
+    "name": "jasoncai0"
+  },
+  "repository": "https://github.com/jasoncai0/claude-session-hud",
+  "license": "MIT",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "usage": {
+      "type": "boolean",
+      "title": "模块：用量",
+      "description": "5h / 7d 限额进度条",
+      "default": true,
+      "required": false
+    },
+    "mr": {
+      "type": "boolean",
+      "title": "模块：Codeup MR",
+      "description": "会话涉及仓库当前分支的 MR",
+      "default": true,
+      "required": false
+    },
+    "docs": {
+      "type": "boolean",
+      "title": "模块：飞书文档",
+      "description": "会话创建或提到的飞书文档",
+      "default": true,
+      "required": false
+    },
+    "deploy": {
+      "type": "boolean",
+      "title": "模块：云效发布",
+      "description": "本会话触发的 AppStack 发布及其运行状态",
+      "default": true,
+      "required": false
+    },
+    "collapsed": {
+      "type": "boolean",
+      "title": "默认折叠",
+      "description": "新会话起始时 HUD 折叠为一行摘要",
+      "default": false,
+      "required": false
+    },
+    "usageReset": {
+      "type": "boolean",
+      "title": "用量：重置倒计时",
+      "description": "显示 ↻3h20m",
+      "default": true,
+      "required": false
+    },
+    "mrMaxRows": {
+      "type": "number",
+      "title": "MR：最多行数",
+      "description": "超出时最后一行为「展开」按钮，点开原地显示全部（1-10）",
+      "default": 3,
+      "required": false
+    },
+    "mrRepo": {
+      "type": "boolean",
+      "title": "MR：仓库列",
+      "description": "显示 group/repo 列",
+      "default": true,
+      "required": false
+    },
+    "mrRepoWidth": {
+      "type": "number",
+      "title": "MR：仓库列宽",
+      "description": "单位：字符格（6-60）",
+      "default": 18,
+      "required": false
+    },
+    "mrSourceWidth": {
+      "type": "number",
+      "title": "MR：源分支列宽",
+      "description": "超出中间省略，悬停看全（6-80）",
+      "default": 24,
+      "required": false
+    },
+    "mrTargetWidth": {
+      "type": "number",
+      "title": "MR：目标分支列宽",
+      "description": "超出中间省略，悬停看全（6-60）",
+      "default": 16,
+      "required": false
+    },
+    "mrStats": {
+      "type": "boolean",
+      "title": "MR：增删行数",
+      "description": "显示 +422 -10",
+      "default": true,
+      "required": false
+    },
+    "mrChecks": {
+      "type": "boolean",
+      "title": "MR：检查按钮",
+      "description": "显示 ✓ 检查 ⌄ 并可展开",
+      "default": true,
+      "required": false
+    },
+    "mrPollSeconds": {
+      "type": "number",
+      "title": "MR：轮询间隔秒",
+      "description": "15-3600",
+      "default": 60,
+      "required": false
+    },
+    "docsMaxRows": {
+      "type": "number",
+      "title": "文档：最多行数",
+      "description": "超出时可原地展开 / 收起（1-10）",
+      "default": 3,
+      "required": false
+    },
+    "docsTitleWidth": {
+      "type": "number",
+      "title": "文档：标题列宽",
+      "description": "超出省略，悬停看全（10-120）",
+      "default": 40,
+      "required": false
+    },
+    "docsMentioned": {
+      "type": "boolean",
+      "title": "文档：含提及",
+      "description": "关闭后只显示会话创建的文档",
+      "default": true,
+      "required": false
+    },
+    "deployMaxRows": {
+      "type": "number",
+      "title": "发布：最多行数",
+      "description": "超出时可原地展开 / 收起（1-10）",
+      "default": 3,
+      "required": false
+    },
+    "deployPollSeconds": {
+      "type": "number",
+      "title": "发布：轮询间隔秒",
+      "description": "只轮询未结束的运行（10-600）",
+      "default": 30,
+      "required": false
+    },
+    "token": {
+      "type": "string",
+      "title": "云效个人访问令牌",
+      "description": "可选。缺省读 $ALIBABA_CLOUD_YUNXIAO_ACCESS_TOKEN，再读 ~/.zshrc 等里的 export 行",
+      "sensitive": true,
+      "required": false
+    }
+  }
+}

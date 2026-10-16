@@ -1,0 +1,497 @@
+import { atom, read, update } from 'claude-code'
+import type { EngineInterface, Register } from 'claude-code'
+
+import type { DeployRun, DocLink, DocOrigin, MrView, RepoView, SessionView, Usage } from '../types'
+import { addRun, envOfStage, findStageTargets, isSettled, pickExecution, runOf, triggerOf } from './deploy/parse'
+import type { ApiPipelineRun } from './deploy/parse'
+import { deployList, deploySection } from './deploy/view'
+import { findDocs, isCreation, isLarkTool, mergeDocs } from './docs/links'
+import type { FoundDoc } from './docs/links'
+import { LARK_CLI, inspectArgv, isMissingProgram, lookupOf } from './docs/lookup'
+import type { Lookup } from './docs/lookup'
+import { docList, docsLayout, docsSection, visibleDocs } from './docs/view'
+import { band, parseHud, status } from './hud'
+import { API_BASE, diffStat, exportFromProfile, isOpen, parseRemote, pickMrs, repoLabel, stateOf, toView, tokenFromProfile } from './mr/codeup'
+import type { ApiChangeRequest, ApiCompare, ApiDetail, Repo } from './mr/codeup'
+import { dirsOf, mrList, rememberDirs } from './mr/session'
+import { mrLayout, mrSection } from './mr/view'
+import { MODULE_IDS, PLUGIN, settingsOf } from './settings'
+import type { Settings } from './settings'
+import { isBlank } from './tree'
+import type { Fold, Section } from './ui'
+import { usageSection } from './usage/view'
+
+const usage = atom({ plugin: 'session-hud', key: 'usage' } as const, null)
+const mrView = atom({ plugin: 'session-hud', key: 'mrView' } as const, null)
+const mrDirs = atom({ plugin: 'session-hud', key: 'mrDirs' } as const, [])
+const mrExpanded = atom({ plugin: 'session-hud', key: 'mrExpanded' } as const, null)
+const mrDismissed = atom({ plugin: 'session-hud', key: 'mrDismissed' } as const, [])
+const docs = atom({ plugin: 'session-hud', key: 'docs' } as const, [])
+const docsDismissed = atom({ plugin: 'session-hud', key: 'docsDismissed' } as const, [])
+const collapsed = atom({ plugin: 'session-hud', key: 'collapsed' } as const, null)
+const deploys = atom({ plugin: 'session-hud', key: 'deploys' } as const, [])
+const deployExpanded = atom({ plugin: 'session-hud', key: 'deployExpanded' } as const, null)
+const deployDismissed = atom({ plugin: 'session-hud', key: 'deployDismissed' } as const, [])
+const expandedLists = atom({ plugin: 'session-hud', key: 'expandedLists' } as const, [])
+
+const PAGE_SIZE = 100
+const HTTP_NOT_FOUND = 404
+const MAX_REPOS = 5
+const GIT_TIMEOUT_MS = 5_000
+const LARK_TIMEOUT_MS = 8_000
+/** Exit status of a command that was not found. */
+const NOT_FOUND = 127
+/** Title lookups per turn: each is one lark-cli call. */
+const LOOKUPS_PER_TURN = 5
+/** Retryable lookup failures per document before its title is given up. */
+const MAX_LOOKUP_TRIES = 3
+const PROFILES = ['.zshrc', '.zshenv', '.zprofile', '.bashrc', '.profile']
+const NO_TOKEN = '未找到云效 token（设置 ALIBABA_CLOUD_YUNXIAO_ACCESS_TOKEN）'
+const NO_ORG = '未找到云效组织 ID（设置 ALIBABA_CLOUD_YUNXIAO_ORGANIZATION_ID）'
+const ORG_VAR = 'ALIBABA_CLOUD_YUNXIAO_ORGANIZATION_ID'
+const APPSTACK_BASE = 'https://openapi-rdc.aliyuncs.com/oapi/v1/appstack/organizations'
+/** A just-triggered stage needs a moment before its execution is listed. */
+const DEPLOY_FIRST_CHECK_MS = 5_000
+
+const listOf = <T,>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : [])
+
+// ponytail: module-level caches; reset on reload, which is fine
+const repoIds = new Map<string, number>()
+const roots = new Map<string, string>()
+/** +/- per `${repo}!${id}@${head sha}`: the diff is fetched again only when the branch moves. */
+const stats = new Map<string, { additions: number; deletions: number }>()
+let tokenCache: { value: string | undefined } | null = null
+let orgCache: { value: string | undefined } | null = null
+/** Release-stage names per `${app}/${workflowSn}`, read once: they name a tracked run's env. */
+const stageNames = new Map<string, Map<string, string>>()
+/** Run keys being fetched, so a press during a poll does not fetch twice. */
+const deployFetching = new Set<string>()
+/** The lark-cli that ran; null once none was found. */
+let larkCli: string | null | undefined
+/** Tokens whose title lookup is running, so overlapping turns (subagents, fast prompts) never look one up twice. */
+const lookingUp = new Set<string>()
+
+/** Runs one module's step: a failure neither stops the other modules nor the event, and is logged. */
+async function guard($: EngineInterface, id: string, step: () => Promise<unknown>): Promise<void> {
+  try {
+    await step()
+  } catch (err) {
+    $.ui.log(`${PLUGIN} ${id}: ${err instanceof Error ? err.message : String(err)}`)
+  }
+}
+
+// ── usage ───────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+async function refreshUsage($: EngineInterface) {
+  const u = await $.session.usage()
+  const next: Usage = { rateLimits: u.rateLimits }
+  await update($, usage, () => next)
+}
+
+// ── Codeup MR ───────────────────────────────────────────────────────────────────────────────────────────────────────
+
+async function git($: EngineInterface, dir: string, ...args: string[]): Promise<string> {
+  const { exitCode, stdout } = await $.process.run(['git', '-C', dir, ...args], { timeoutMs: GIT_TIMEOUT_MS }).catch(() => ({ exitCode: 1, stdout: '' }))
+  return exitCode === 0 ? stdout.trim() : ''
+}
+
+async function resolveToken($: EngineInterface, configured: string | undefined): Promise<string | undefined> {
+  if (configured) return configured
+  const fromEnv = await $.env.get('ALIBABA_CLOUD_YUNXIAO_ACCESS_TOKEN')
+  if (fromEnv) return fromEnv
+  const home = await $.env.get('HOME')
+  for (const name of PROFILES) {
+    const token = tokenFromProfile(await $.fs.read(`${home}/${name}`).catch(() => ''))
+    if (token) return token
+  }
+  return undefined
+}
+
+async function getJson<T>($: EngineInterface, token: string, url: string, what: string): Promise<T> {
+  const res = await $.http.fetch(url, { headers: { 'x-yunxiao-token': token } })
+  if (!res.ok) throw new Error(`${what} ${res.status}: ${res.text.slice(0, 120)}`)
+  return JSON.parse(res.text) as T
+}
+
+const api = <T,>($: EngineInterface, token: string, path: string): Promise<T> => getJson<T>($, token, `${API_BASE}/${path}`, 'Codeup')
+
+async function cachedToken($: EngineInterface, settings: Settings): Promise<string | undefined> {
+  tokenCache ??= { value: await resolveToken($, settings.token) }
+  return tokenCache.value
+}
+
+/** Whether the branch still exists on Codeup: 404 is deleted; any other failure is unknown, so no check is shown. */
+async function isBranchAlive($: EngineInterface, token: string, base: string, branch: string): Promise<boolean | undefined> {
+  const res = await $.http.fetch(`${API_BASE}/${base}/branches/${encodeURIComponent(branch)}`, { headers: { 'x-yunxiao-token': token } }).catch(() => null)
+  if (!res) return undefined
+  return res.ok ? true : res.status === HTTP_NOT_FOUND ? false : undefined
+}
+
+async function fetchMrs($: EngineInterface, token: string, repo: Repo, branch: string, head: string): Promise<MrView[]> {
+  let repoId = repoIds.get(repo.path)
+  if (repoId === undefined) {
+    repoId = (await api<{ id: number }>($, token, `${repo.org}/repositories/${encodeURIComponent(repo.path)}`)).id
+    repoIds.set(repo.path, repoId)
+  }
+  const base = `${repo.org}/repositories/${repoId}`
+  // ponytail: Codeup ignores sourceBranch filtering, so scan the newest 100 MRs; page further if old branches matter
+  const list = await api<ApiChangeRequest[]>($, token, `${repo.org}/changeRequests?projectIds=${repoId}&state=all&perPage=${PAGE_SIZE}`)
+  const picked = pickMrs(list, branch)
+  // One branch lookup per repo: every picked MR has this branch as its source.
+  const isAlive = picked.length ? await isBranchAlive($, token, base, branch) : undefined
+  // ponytail: the stats key ignores the target branch moving; add its sha if merged-in target commits must show
+  return Promise.all(picked.map(async cr => {
+    const key = `${repo.path}!${cr.localId}@${head}`
+    const [detail, stat] = await Promise.all([
+      api<ApiDetail>($, token, `${base}/changeRequests/${cr.localId}`).catch(() => undefined),
+      !isOpen(cr) ? undefined : stats.get(key) ?? api<ApiCompare>($, token, `${base}/compares?from=${encodeURIComponent(cr.targetBranch)}&to=${encodeURIComponent(cr.sourceBranch)}`)
+        .then(diffStat)
+        .then(s => (stats.set(key, s), s))
+        .catch(() => undefined),
+    ])
+    return toView(cr, repo.path, detail, stat, isAlive)
+  }))
+}
+
+/** Git roots of the session's cwd and of every directory it touched, cwd first, deduped. */
+async function sessionRoots($: EngineInterface): Promise<string[]> {
+  const touched = listOf<string>(await read($, mrDirs))
+  const candidates = [await $.session.cwd(), ...[...touched].reverse()]
+  const found: string[] = []
+  for (const dir of candidates) {
+    if (!roots.has(dir)) roots.set(dir, await git($, dir, 'rev-parse', '--show-toplevel'))
+    const root = roots.get(dir)
+    if (root && !found.includes(root)) found.push(root)
+    if (found.length >= MAX_REPOS) break
+  }
+  return found
+}
+
+async function repoView($: EngineInterface, token: string, root: string): Promise<RepoView | null> {
+  const [remote, branch, upstream, local] = await Promise.all([
+    git($, root, 'remote', 'get-url', 'origin'),
+    git($, root, 'branch', '--show-current'),
+    git($, root, 'rev-parse', '@{u}'),
+    git($, root, 'rev-parse', 'HEAD'),
+  ])
+  const repo = parseRemote(remote)
+  if (!repo || !branch) return null
+  const name = repoLabel(repo.path)
+  return fetchMrs($, token, repo, branch, upstream || local)
+    .then(mrs => ({ root, repo: name, branch, mrs }))
+    .catch((err: Error) => ({ root, repo: name, branch, mrs: [], error: err.message }))
+}
+
+async function refreshMrs($: EngineInterface, settings: Settings) {
+  const found = await sessionRoots($)
+  if (!found.length) {
+    await update($, mrView, () => null)
+    return
+  }
+  const token = await cachedToken($, settings)
+  if (!token) {
+    await update($, mrView, (): SessionView => ({ repos: [], error: NO_TOKEN }))
+    return
+  }
+  const repos = (await Promise.all(found.map(root => repoView($, token, root)))).filter((r): r is RepoView => r !== null)
+  await update($, mrView, (): SessionView => ({ repos }))
+}
+
+async function rememberMrDirs($: EngineInterface, tool: string, input: Readonly<Record<string, unknown>>) {
+  const added = dirsOf(tool, input, (await $.env.get('HOME')) ?? '')
+  if (added.length) await update($, mrDirs, known => rememberDirs(listOf<string>(known), added))
+}
+
+// ── Feishu docs ─────────────────────────────────────────────────────────────────────────────────────────────────────
+
+async function rememberDocs($: EngineInterface, found: readonly FoundDoc[], origin: DocOrigin, settings: Settings) {
+  if (!found.length || (origin === 'mentioned' && !settings.docsMentioned)) return
+  const now = await $.clock.now()
+  await update($, docs, list => mergeDocs(listOf<DocLink>(list), found, origin, now))
+}
+
+/** A Lark call's input names the docs it works on (mentions); only a create call's output counts, as what it made. */
+async function rememberToolDocs($: EngineInterface, tool: string, input: Readonly<Record<string, unknown>>, output: string, settings: Settings) {
+  if (!isLarkTool(tool, input)) return
+  const mentioned = findDocs(JSON.stringify(input))
+  const asked = new Set(mentioned.map(d => d.token))
+  const made = isCreation(tool, input) ? findDocs(output).filter(d => !asked.has(d.token)) : []
+  // Mentions first, so what the call made lands newest: a +copy lists the copy above its source.
+  await rememberDocs($, mentioned, 'mentioned', settings)
+  await rememberDocs($, made, 'created', settings)
+}
+
+/**
+ * The document's title through lark-cli. Only a missing program moves on to the next install folder, and only when
+ * none of them exists are lookups given up for the session; a timeout or other failure is retried on a later turn.
+ */
+async function lookupTitle($: EngineInterface, url: string): Promise<Lookup> {
+  const candidates = larkCli === undefined ? LARK_CLI : larkCli ? [larkCli] : []
+  for (const bin of candidates) {
+    const run = await $.process.run(inspectArgv(bin, url), { timeoutMs: LARK_TIMEOUT_MS }).then(
+      r => (r.exitCode === NOT_FOUND ? null : r),
+      (err: unknown) => (isMissingProgram(err) ? null : { failed: err instanceof Error ? err.message : String(err) }),
+    )
+    if (run === null) continue
+    if (!('failed' in run)) larkCli = bin
+    return lookupOf(run)
+  }
+  if (candidates.length) larkCli = null
+  return { final: '未找到 lark-cli' }
+}
+
+/** Looks up the titles still missing, a few per turn; a document is retried a few times, then given up. */
+async function lookupTitles($: EngineInterface) {
+  const pending = listOf<DocLink>(await read($, docs))
+    .filter(d => !d.title && !d.isLookedUp && (d.lookupTries ?? 0) < MAX_LOOKUP_TRIES && !lookingUp.has(d.token))
+    .slice(0, LOOKUPS_PER_TURN)
+  if (!pending.length) return
+  pending.forEach(d => lookingUp.add(d.token))
+  const results = new Map(await Promise.all(pending.map(async d => [d.token, await lookupTitle($, d.url)] as const)))
+  pending.forEach(d => lookingUp.delete(d.token))
+  results.forEach((r, token) => {
+    if ('retry' in r) $.ui.log(`${PLUGIN} docs: 标题查询失败（将重试）${token.slice(0, 8)}…: ${r.retry}`)
+  })
+  await update($, docs, list => listOf<DocLink>(list).map(d => {
+    const r = results.get(d.token)
+    if (!r) return d
+    if ('title' in r) return { ...d, title: r.title, isLookedUp: true }
+    if ('final' in r) return { ...d, isLookedUp: true }
+    return { ...d, lookupTries: (d.lookupTries ?? 0) + 1 }
+  }))
+}
+
+// ── Yunxiao deploys ─────────────────────────────────────────────────────────────────────────────────────────────
+
+/** The Yunxiao organization: $ALIBABA_CLOUD_YUNXIAO_ORGANIZATION_ID, its export line in a shell profile, else the org of the session's Codeup repo. */
+async function resolveOrg($: EngineInterface): Promise<string | undefined> {
+  const fromEnv = await $.env.get('ALIBABA_CLOUD_YUNXIAO_ORGANIZATION_ID')
+  if (fromEnv) return fromEnv
+  const home = await $.env.get('HOME')
+  for (const name of PROFILES) {
+    const org = exportFromProfile(await $.fs.read(`${home}/${name}`).catch(() => ''), ORG_VAR)
+    if (org) return org
+  }
+  const root = (await sessionRoots($))[0]
+  return root ? parseRemote(await git($, root, 'remote', 'get-url', 'origin'))?.org : undefined
+}
+
+/** The stage's name and env, for a run whose trigger did not print them (a tracked link, a direct API call). */
+async function stageOf($: EngineInterface, token: string, org: string, r: DeployRun): Promise<Partial<DeployRun>> {
+  if (r.stageName) return {}
+  const key = `${r.app}/${r.workflowSn}`
+  if (!stageNames.has(key)) {
+    const briefs = await getJson<{ sn?: unknown; name?: unknown }[]>($, token, `${APPSTACK_BASE}/${org}/apps/${encodeURIComponent(r.app)}/releaseWorkflow/${r.workflowSn}/releaseStageBriefs`, 'AppStack')
+    stageNames.set(key, new Map((Array.isArray(briefs) ? briefs : []).flatMap(b => (typeof b.sn === 'string' && typeof b.name === 'string' ? [[b.sn, b.name] as const] : []))))
+  }
+  const name = stageNames.get(key)?.get(r.stageSn)
+  return name ? { stageName: name, ...(r.env ? {} : { env: envOfStage(name) }) } : {}
+}
+
+/** The run's execution (found once, then pinned) and its stages' jobs as Yunxiao has them now. */
+async function fetchRun($: EngineInterface, token: string, org: string, r: DeployRun): Promise<Partial<DeployRun>> {
+  const base = `${APPSTACK_BASE}/${org}/apps/${encodeURIComponent(r.app)}/releaseWorkflows/${r.workflowSn}/releaseStages/${r.stageSn}/executions`
+  const stage = await stageOf($, token, org, r).catch(() => ({}))
+  const latest = r.number === undefined ? (await getJson<{ data?: { number?: unknown; startTime?: unknown }[] }>($, token, `${base}?perPage=1&page=1`, 'AppStack')).data?.[0] : undefined
+  const number = r.number ?? pickExecution(latest, r.isTracked ? 0 : r.triggeredAt)
+  if (number === undefined) return stage
+  const { branch, ...run } = runOf(await getJson<ApiPipelineRun>($, token, `${base}/${number}:getPipelineRun`, 'AppStack'))
+  return { ...stage, number, ...run, ...(r.branch || !branch ? {} : { branch }) }
+}
+
+/** Refreshes `key`'s run, or every run still going; a failure is kept on its run and shown in its row. */
+async function refreshDeploys($: EngineInterface, settings: Settings, key?: string) {
+  const due = listOf<DeployRun>(await read($, deploys)).filter(r => (key ? r.key === key : !isSettled(r)) && !deployFetching.has(r.key))
+  if (!due.length) return
+  const token = await cachedToken($, settings)
+  orgCache ??= { value: await resolveOrg($) }
+  const org = orgCache.value
+  due.forEach(r => deployFetching.add(r.key))
+  const patches = await Promise.all(due.map(async r => {
+    if (!token || !org) return [r.key, { error: token ? NO_ORG : NO_TOKEN }] as const
+    const patch = await fetchRun($, token, org, r).then(
+      (p): Partial<DeployRun> => ({ ...p, error: undefined }),
+      (err: Error): Partial<DeployRun> => ({ error: err.message }),
+    )
+    return [r.key, patch] as const
+  }))
+  due.forEach(r => deployFetching.delete(r.key))
+  const byKey = new Map(patches)
+  await update($, deploys, list => listOf<DeployRun>(list).map(r => {
+    const patch = byKey.get(r.key)
+    if (!patch) return r
+    const { error, ...rest } = { ...r, ...patch }
+    return error ? { ...rest, error } : rest
+  }))
+}
+
+async function rememberDeploy($: EngineInterface, tool: string, input: Readonly<Record<string, unknown>>, output: string, isError: boolean, settings: Settings) {
+  const t = triggerOf(tool, input, output, isError)
+  if (!t) return
+  const now = await $.clock.now()
+  await update($, deploys, list => addRun(listOf<DeployRun>(list), t, now))
+  $.clock.after(DEPLOY_FIRST_CHECK_MS, () => void guard($, 'deploy', () => refreshDeploys($, settings, t.key)))
+}
+
+/** Tracks the AppStack stages linked in `text` without deploying anything: each shows its latest run. */
+async function trackDeploys($: EngineInterface, text: string, settings: Settings): Promise<number> {
+  const targets = findStageTargets(text)
+  if (!targets.length) return 0
+  const now = await $.clock.now()
+  await update($, deploys, list => targets.reduce((runs, t) => addRun(runs, t, now, true), listOf<DeployRun>(list)))
+  await Promise.all(targets.map(t => refreshDeploys($, settings, t.key)))
+  return targets.length
+}
+
+// ── /hud ────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+async function runHud($: EngineInterface, args: string, settings: Settings): Promise<string> {
+  const cmd = parseHud(args)
+  if (cmd.kind === 'reply') return cmd.text
+  if (cmd.kind === 'status') return status(settings, (await read($, collapsed)) ?? settings.collapsed)
+  if (cmd.kind === 'fold') {
+    await update($, collapsed, () => cmd.isCollapsed)
+    return cmd.isCollapsed ? '已折叠' : '已展开'
+  }
+  const { deny } = await $.config.set({ key: `${PLUGIN}.${cmd.key}`, value: cmd.value })
+  return deny ? `未能修改 ${cmd.key}：${deny}` : `已设置 ${cmd.key} = ${String(cmd.value)}`
+}
+
+// ── wiring ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+export const register: Register = (on, options) => {
+  const settings = settingsOf(options)
+  const isAnyOn = MODULE_IDS.some(id => settings[id])
+
+  on('session.start', async ($, e, next) => {
+    const result = await next(e)
+    await $.command.register({ name: 'hud', description: 'session-hud：查看 / 启停模块、折叠、修改配置', argumentHint: '[usage|mr|docs|deploy on|off | fold | unfold | set <key> <value>]' })
+    if (settings.mr) await $.command.register({ name: 'mr', description: '列出本会话涉及仓库的 Codeup MR 及链接' })
+    if (settings.docs) await $.command.register({ name: 'docs', description: '列出本会话创建或提到的飞书文档及链接' })
+    if (settings.deploy) await $.command.register({ name: 'deploys', description: '列出本会话的云效发布；带 AppStack 阶段链接则跟踪该阶段', argumentHint: '[AppStack 阶段链接]' })
+    if (settings.usage) await guard($, 'usage', () => refreshUsage($))
+    if (settings.mr) {
+      void guard($, 'mr', () => refreshMrs($, settings))
+      $.clock.every(settings.mrPollSeconds * 1_000, () => void guard($, 'mr', () => refreshMrs($, settings)))
+    }
+    if (settings.deploy) {
+      // Only runs still going are fetched; with none, a tick reads the state and stops.
+      void guard($, 'deploy', () => refreshDeploys($, settings))
+      $.clock.every(settings.deployPollSeconds * 1_000, () => void guard($, 'deploy', () => refreshDeploys($, settings)))
+    }
+    return result
+  })
+
+  // Pushed with every measurement: no polling, no extra tokens.
+  on('session.measure', async ($, e, next) => {
+    if (settings.usage) await guard($, 'usage', () => refreshUsage($))
+    return next(e)
+  })
+
+  on('prompt.submit', async ($, e, next) => {
+    if (settings.docs) await guard($, 'docs', () => rememberDocs($, findDocs(e.text), 'mentioned', settings))
+    if (settings.deploy) await guard($, 'deploy', () => trackDeploys($, e.text, settings))
+    return next(e)
+  })
+
+  on('tool.call', async ($, e, next) => {
+    const ran = await next(e)
+    const { tool, ...input } = e
+    // A failed call's error text is no output: nothing it names was made.
+    const output = !ran.isError && 'text' in ran && typeof ran.text === 'string' ? ran.text : ''
+    if (settings.mr) await guard($, 'mr', () => rememberMrDirs($, tool, input))
+    if (settings.docs) await guard($, 'docs', () => rememberToolDocs($, tool, input, output, settings))
+    if (settings.deploy) await guard($, 'deploy', () => rememberDeploy($, tool, input, 'text' in ran && typeof ran.text === 'string' ? ran.text : '', Boolean(ran.isError), settings))
+    return ran
+  })
+
+  on('turn.complete', async ($, e, next) => {
+    const result = await next(e)
+    // A subagent's turn ends inside the main one: its answer reaches the main answer, and the refreshes wait for it.
+    if (e.agentId) return result
+    const answer = 'answer' in e && typeof e.answer === 'string' ? e.answer : ''
+    await Promise.all([
+      settings.mr && guard($, 'mr', () => refreshMrs($, settings)),
+      settings.docs && guard($, 'docs', () => rememberDocs($, findDocs(answer), 'mentioned', settings)),
+    ])
+    // Title lookups run lark-cli (seconds each): off the turn's path, on a timer.
+    if (settings.docs) $.clock.after(0, () => void guard($, 'docs', () => lookupTitles($)))
+    return result
+  })
+
+  on('command.run', { command: 'hud' }, async ($, e) => ({ text: await runHud($, e.args, settings) }))
+
+  on('command.run', { command: 'mr' }, async $ => {
+    if (!settings.mr) return { text: 'Codeup MR 模块已关闭：/hud mr on' }
+    await refreshMrs($, settings)
+    const v = await read($, mrView)
+    return { text: v?.error ?? mrList(v?.repos ?? [], state => stateOf(state).label) }
+  })
+
+  on('command.run', { command: 'deploys' }, async ($, e) => {
+    if (!settings.deploy) return { text: '云效发布模块已关闭：/hud deploy on' }
+    // `/deploys <stage link>…` tracks those stages; bare `/deploys` refreshes and lists.
+    if (!(await trackDeploys($, e.args, settings))) await refreshDeploys($, settings)
+    return { text: deployList(listOf<DeployRun>(await read($, deploys))) }
+  })
+
+  on('command.run', { command: 'docs' }, async $ => ({
+    text: settings.docs ? (await guard($, 'docs', () => lookupTitles($)), docList(listOf<DocLink>(await read($, docs)))) : '飞书文档模块已关闭：/hud docs on',
+  }))
+
+  // The band above the prompt is one site shared by every plugin: draw on top of whatever the plugins beneath drew
+  // (next), never instead of it, and step aside entirely while a survey holds it.
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    if (e.props.hasSurvey || !isAnyOn) return next(e)
+    const ui = $.ui.resolve(e)
+    const unfolded = listOf<string>(await read($, expandedLists))
+    const foldOf = (list: string): Fold => ({
+      isExpanded: unfolded.includes(list),
+      toggle: () => void update($, expandedLists, cur => {
+        const known = listOf<string>(cur)
+        return known.includes(list) ? known.filter(l => l !== list) : [...known, list]
+      }),
+    })
+    const drawn: (Section | null)[] = []
+    if (settings.usage) drawn.push(usageSection(ui, await read($, usage), await $.clock.now(), settings))
+    if (settings.mr) {
+      const mrState = { view: await read($, mrView), dismissed: listOf<string>(await read($, mrDismissed)), expanded: await read($, mrExpanded) }
+      drawn.push(mrSection(ui, mrState, mrLayout(settings, e.props.bodyColumns), {
+        // Unfolding the checks also fetches them afresh: merge state, branch, conflicts as Codeup has them now.
+        toggleChecks: key => {
+          void update($, mrExpanded, cur => (cur === key ? null : key))
+          void guard($, 'mr', () => refreshMrs($, settings))
+        },
+        dismiss: key => void update($, mrDismissed, list => [...listOf<string>(list), key]),
+      }, foldOf('mr')))
+    }
+    if (settings.docs) {
+      const shown = visibleDocs(listOf<DocLink>(await read($, docs)), listOf<string>(await read($, docsDismissed)), settings)
+      drawn.push(docsSection(ui, shown, docsLayout(settings, e.props.bodyColumns), token => void update($, docsDismissed, list => [...listOf<string>(list), token]), foldOf('docs')))
+    }
+    if (settings.deploy) {
+      const deployState = { runs: listOf<DeployRun>(await read($, deploys)), dismissed: listOf<string>(await read($, deployDismissed)), expanded: await read($, deployExpanded) }
+      drawn.push(deploySection(ui, deployState, mrLayout(settings, e.props.bodyColumns), {
+        // Unfolding a run's stages also fetches them afresh, finished or not.
+        toggle: key => {
+          void update($, deployExpanded, cur => (cur === key ? null : key))
+          void guard($, 'deploy', () => refreshDeploys($, settings, key))
+        },
+        dismiss: key => void update($, deployDismissed, list => [...listOf<string>(list), key]),
+      }, foldOf('deploy')))
+    }
+    const sections = drawn.filter((s): s is Section => s !== null)
+    if (!sections.length) return next(e)
+
+    const isCollapsed = (await read($, collapsed)) ?? settings.collapsed
+    const below = await next(e)
+    const mine = band(ui, sections, isCollapsed, () => void update($, collapsed, cur => !(cur ?? settings.collapsed)))
+    if (isBlank(below)) return mine
+    return (
+      <ui.Box flexDirection="column">
+        {mine}
+        {below}
+      </ui.Box>
+    )
+  })
+}
