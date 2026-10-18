@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { DocLink } from '../../types'
-import { findDocs, isCreation, isLarkTool, mergeDocs } from './links'
+import { artifactsOfCall, findAllDocs, findArtifacts, findDocs, htmlTitle, isCreation, isLarkTool, mergeDocs } from './links'
 import { inspectArgv, isMissingProgram, lookupOf, titleOf } from './lookup'
 
 const DOCX = 'https://acme.feishu.cn/docx/Doc0123456789abcdefABCD'
@@ -76,4 +76,42 @@ test('titleOf reads lark-cli +inspect JSON and tolerates failures', () => {
   expect(titleOf('{"ok":true,"data":{"title":" 设计 ","token":"x"}}')).toBe('设计')
   expect(titleOf('{"ok":false,"data":{"title":"x"}}')).toBe(undefined)
   expect(titleOf('not json')).toBe(undefined)
+})
+
+const ART = 'https://claude.ai/code/artifact/38259d61-6573-4493-a61c-adce693a2b57'
+const ART_SHORT = 'https://claude.ai/artifact/AbCdEf123456'
+
+test('findArtifacts reads both artifact link shapes, deduped, with a markdown label', () => {
+  expect(findArtifacts(`see [评审报告](${ART}) and ${ART_SHORT}, again ${ART}`)).toEqual([
+    { token: '38259d61-6573-4493-a61c-adce693a2b57', kind: 'artifact', url: ART, label: '评审报告' },
+    { token: 'AbCdEf123456', kind: 'artifact', url: ART_SHORT },
+  ])
+  expect(findArtifacts('https://claude.ai/code/artifacts and https://claude.ai/chat/x')).toEqual([])
+  expect(findAllDocs(`${DOCX} ${ART}`, false).map(d => d.kind)).toEqual(['docx'])
+  expect(findAllDocs(`${DOCX} ${ART}`, true).map(d => d.kind)).toEqual(['docx', 'artifact'])
+})
+
+test('artifactsOfCall: a publish made its page, titled by its file; a read names its artifact with the header title', () => {
+  const published = `Published /tmp/s/report.html at ${ART}\n\nTo get back to it later: ${ART_SHORT}`
+  expect(artifactsOfCall('Artifact', { file_path: '/tmp/s/report.html' }, published, '评审报告')).toEqual({
+    made: [{ token: '38259d61-6573-4493-a61c-adce693a2b57', kind: 'artifact', url: ART, title: '评审报告' }], mentioned: [],
+  })
+  expect(artifactsOfCall('Artifact', { title: '方案' }, published).made[0]?.title).toBe('方案')
+  expect(artifactsOfCall('Artifact', { file_path: '/tmp/s/board-review.html' }, published).made[0]?.title).toBe('board-review')
+  const read = `[Artifact 38259d61-6573-4493-a61c-adce693a2b57 "Board Review" — owned by you, private]\n<!doctype html>`
+  expect(artifactsOfCall('Artifact', { action: 'read', url: ART }, read).mentioned[0]?.title).toBe('Board Review')
+})
+
+test('artifactsOfCall ignores listings and asset uploads; a Docs connector create made what it links; other tools name by input', () => {
+  expect(artifactsOfCall('Artifact', { action: 'list' }, `${ART}\n${ART_SHORT}`)).toEqual({ made: [], mentioned: [] })
+  expect(artifactsOfCall('Artifact', { url: ART, asset: true }, `uploaded to ${ART}`)).toEqual({ made: [], mentioned: [] })
+  expect(artifactsOfCall('mcp__x__batch', { container: { kind: 'project', create: { name: 'n' } } }, `created ${ART_SHORT}`).made.map(d => d.token)).toEqual(['AbCdEf123456'])
+  expect(artifactsOfCall('Bash', { command: `curl ${ART}` }, `other ${ART_SHORT}`).mentioned.map(d => d.token)).toEqual(['38259d61-6573-4493-a61c-adce693a2b57'])
+})
+
+test('htmlTitle reads a page title; an artifact merges as looked up, keeping a title it brings', () => {
+  expect(htmlTitle('<html><head><title> 评审报告 </title></head>')).toBe('评审报告')
+  expect(htmlTitle('<html></html>')).toBe(undefined)
+  const merged = mergeDocs([], [{ token: 'a1b2c3d4e5', kind: 'artifact', url: ART, title: 'T' }], 'created', 1)
+  expect(merged[0]).toEqual({ token: 'a1b2c3d4e5', url: ART, kind: 'artifact', origin: 'created', at: 1, title: 'T', isLookedUp: true })
 })

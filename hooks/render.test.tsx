@@ -336,6 +336,30 @@ test('a GitHub PR link in a prompt pins that PR', async ($, on) => {
   await ui.unmount()
 })
 
+test('an Artifact publish shows as 创建 with its page title, the title linking to the artifact; no lark lookup', async ($, on) => {
+  const calls: string[] = []
+  const art = 'https://claude.ai/code/artifact/38259d61-6573-4493-a61c-adce693a2b57'
+  const clock = world(on, { calls, toolText: `Published /tmp/s/report.html at ${art}` })
+  on('fs.read', async (_$, e) => ({ value: String(e.path).endsWith('report.html') ? '<html><title>评审报告</title></html>' : '' }) as never)
+  await (($ as unknown) as { tool: { call: (i: object) => Promise<unknown> } }).tool.call({ tool: 'Artifact', file_path: '/tmp/s/report.html' })
+  await $.turn.complete(turn())
+  await clock.advance(1)
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...BAND })
+  expect((await ui.find({ type: 'Link', text: '评审报告' }))?.props.href).toBe(art)
+  expect(await ui.find({ type: 'Text', text: '创建' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Claude' })).toBeDefined()
+  expect(calls.filter(c => c.startsWith('lark '))).toEqual([])
+  await ui.unmount()
+})
+
+test('docsArtifacts off: artifact links are left out', { options: { docsArtifacts: false, mr: false } }, async ($, on) => {
+  world(on)
+  await $.turn.complete(turn('see https://claude.ai/code/artifact/38259d61-6573-4493-a61c-adce693a2b57'))
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...BAND })
+  expect(await ui.find({ type: 'Text', text: 'Claude' })).toBeUndefined()
+  await ui.unmount()
+})
+
 test('deploy off: a deploy.sh run is not tracked', { options: { deploy: false, mr: false } }, async ($, on) => {
   const calls: string[] = []
   const clock = world(on, { calls, toolText: DEPLOY_OUT })

@@ -24,6 +24,7 @@ export const DEFAULTS = {
   docsMaxRows: 3,
   docsTitleWidth: 40,
   docsMentioned: true,
+  docsArtifacts: true,
   deployMaxRows: 3,
   deployPollSeconds: 30,
 } as const

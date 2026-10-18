@@ -5,7 +5,7 @@ import type { DeployRun, DocLink, DocOrigin, MrView, RepoView, SessionView, Usag
 import { addRun, envOfStage, findStageTargets, isSettled, pickExecution, runOf, triggersOf } from './deploy/parse'
 import type { ApiPipelineRun } from './deploy/parse'
 import { deployList, deploySection } from './deploy/view'
-import { findDocs, isCreation, isLarkTool, mergeDocs } from './docs/links'
+import { artifactsOfCall, findAllDocs, findDocs, htmlTitle, isCreation, isLarkTool, mergeDocs } from './docs/links'
 import type { FoundDoc } from './docs/links'
 import { LARK_CLI, inspectArgv, isMissingProgram, lookupOf } from './docs/lookup'
 import type { Lookup } from './docs/lookup'
@@ -344,8 +344,24 @@ async function rememberDocs($: EngineInterface, found: readonly FoundDoc[], orig
   await update($, docs, list => mergeDocs(listOf<DocLink>(list), found, origin, now))
 }
 
+/** The `<title>` of the page an Artifact publish sent, read from its file; undefined when unreadable or untitled. */
+async function publishedTitle($: EngineInterface, tool: string, input: Readonly<Record<string, unknown>>): Promise<string | undefined> {
+  const path = input.file_path
+  if (tool !== 'Artifact' || typeof path !== 'string' || !/\.html?$/i.test(path)) return undefined
+  return htmlTitle(await $.fs.read(path).catch(() => ''))
+}
+
+/** The Claude Artifacts a call published (created) or worked on (mentioned). */
+async function rememberToolArtifacts($: EngineInterface, tool: string, input: Readonly<Record<string, unknown>>, output: string, settings: Settings) {
+  if (!settings.docsArtifacts) return
+  const { made, mentioned } = artifactsOfCall(tool, { ...input }, output, await publishedTitle($, tool, input))
+  await rememberDocs($, mentioned, 'mentioned', settings)
+  await rememberDocs($, made, 'created', settings)
+}
+
 /** A Lark call's input names the docs it works on (mentions); only a create call's output counts, as what it made. */
 async function rememberToolDocs($: EngineInterface, tool: string, input: Readonly<Record<string, unknown>>, output: string, settings: Settings) {
+  await rememberToolArtifacts($, tool, input, output, settings)
   if (!isLarkTool(tool, input)) return
   const mentioned = findDocs(JSON.stringify(input))
   const asked = new Set(mentioned.map(d => d.token))
@@ -532,7 +548,7 @@ export const register: Register = (on, options) => {
   })
 
   on('prompt.submit', async ($, e, next) => {
-    if (settings.docs) await guard($, 'docs', () => rememberDocs($, findDocs(e.text), 'mentioned', settings))
+    if (settings.docs) await guard($, 'docs', () => rememberDocs($, findAllDocs(e.text, settings.docsArtifacts), 'mentioned', settings))
     if (settings.deploy) await guard($, 'deploy', () => trackDeploys($, e.text, settings))
     if (settings.mr) await guard($, 'mr', () => pinMrs($, settings, [...findMrLinks(e.text), ...findPrLinks(e.text)]))
     return next(e)
@@ -566,7 +582,7 @@ export const register: Register = (on, options) => {
         await pinMrs($, settings, [...findMrLinks(answer), ...findPrLinks(answer)])
         await refreshMrs($, settings)
       }),
-      settings.docs && guard($, 'docs', () => rememberDocs($, findDocs(answer), 'mentioned', settings)),
+      settings.docs && guard($, 'docs', () => rememberDocs($, findAllDocs(answer, settings.docsArtifacts), 'mentioned', settings)),
     ])
     // Title lookups run lark-cli (seconds each): off the turn's path, on a timer.
     if (settings.docs) $.clock.after(0, () => void guard($, 'docs', () => lookupTitles($)))

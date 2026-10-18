@@ -14,7 +14,7 @@ const ORIGINS: Record<DocOrigin, { label: string; tone?: string; isDim?: boolean
   mentioned: { label: '提及', isDim: true },
 }
 
-const GLYPHS: Record<string, string> = { wiki: '◈', sheets: '▦', sheet: '▦', base: '▥', bitable: '▥', slides: '▭', mindnotes: '◎', mindnote: '◎', file: '▢' }
+const GLYPHS: Record<string, string> = { artifact: '✦', wiki: '◈', sheets: '▦', sheet: '▦', base: '▥', bitable: '▥', slides: '▭', mindnotes: '◎', mindnote: '◎', file: '▢' }
 
 const kindLabel = (kind: string) => KIND_LABELS[kind] ?? kind
 

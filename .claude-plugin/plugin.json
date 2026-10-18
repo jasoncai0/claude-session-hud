@@ -1,6 +1,6 @@
 {
   "name": "session-hud",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "One HUD above the prompt: rate-limit usage, Codeup MRs and GitHub PRs, the session's Feishu docs and Yunxiao deploys; each module switchable, foldable",
   "author": {
     "name": "jasoncai0"
@@ -26,7 +26,7 @@
     "docs": {
       "type": "boolean",
       "title": "模块：飞书文档",
-      "description": "会话创建或提到的飞书文档",
+      "description": "会话创建或提到的飞书文档与 Claude Artifacts",
       "default": true,
       "required": false
     },
@@ -125,6 +125,13 @@
       "type": "boolean",
       "title": "文档：含提及",
       "description": "关闭后只显示会话创建的文档",
+      "default": true,
+      "required": false
+    },
+    "docsArtifacts": {
+      "type": "boolean",
+      "title": "文档：含 Claude Artifacts",
+      "description": "本会话发布或提到的 Claude Artifact 页面",
       "default": true,
       "required": false
     },

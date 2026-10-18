@@ -4,7 +4,7 @@
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-%E2%89%A5%202.1.29x-d97757)](https://claude.com/claude-code)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-> A Claude Code mod that keeps one HUD above the prompt — rate-limit usage, the Codeup MRs and GitHub PRs of the branches you are on, the Feishu docs the session touched and the Yunxiao (AppStack) releases it triggered — in the Claude Desktop Code tab and the terminal.
+> A Claude Code mod that keeps one HUD above the prompt — rate-limit usage, the Codeup MRs and GitHub PRs of the branches you are on, the Feishu docs and Claude Artifacts the session touched, and the Yunxiao (AppStack) releases it triggered — in the Claude Desktop Code tab and the terminal.
 
 Claude Code 的一个 mod：在**输入框上方**常驻一块 HUD，把当前会话相关的四类信息放在一处：
 
@@ -12,7 +12,7 @@ Claude Code 的一个 mod：在**输入框上方**常驻一块 HUD，把当前�
 | --- | --- |
 | **用量** `usage` | 5h / 7d 限额进度条与重置倒计时 |
 | **MR / PR** `mr` | 会话涉及仓库当前分支的 Codeup MR 与 GitHub PR，可展开合入、落后、源分支删除、冲突、CI、评审等检查 |
-| **飞书文档** `docs` | 本会话创建或提到的飞书 / Lark 文档，点标题直达 |
+| **文档** `docs` | 本会话创建或提到的飞书 / Lark 文档与 Claude Artifacts，点标题直达 |
 | **云效发布** `deploy` | 本会话触发（或跟踪）的 AppStack 发布，显示阶段链接和运行到哪一步 |
 
 **Claude Desktop 的 Code 标签页**和**终端**都能显示（基于 statusLine 的 HUD 在 Desktop 里不显示）。它合并并取代了 [`usage-hud`](https://github.com/jasoncai0/claude-usage-hud) 与 [`codeup-mr`](https://github.com/jasoncai0/claude-codeup-mr)。
@@ -106,7 +106,7 @@ claude plugin update session-hud@claude-session-hud
 - **窄屏自适应**：区域比配置的列宽窄时，名称列按比例收缩（先收掉仓库列），右侧的「检查」「×」始终可见。
 - **超出行数原地展开**：超过最多行数时，最后一行是 `⌄ 展开另 N …` 按钮，点开就地显示全部，`⌃ 收起` 复原。
 - **模块独立启停**：`/hud mr off` 即可关掉某个模块；关掉的模块不注册任何工作，不轮询，也不调接口。
-- **细粒度配置**：20 个配置项，涵盖显隐、列宽、最多行数、轮询间隔等，Desktop 里用 `/hud set` 修改。
+- **细粒度配置**：21 个配置项，涵盖显隐、列宽、最多行数、轮询间隔等，Desktop 里用 `/hud set` 修改。
 - **可折叠**：一键折叠成一行摘要；默认是否折叠也可配置。
 - **与其他插件共存**：HUD 叠在其他插件的输入框上方内容之上，不替换它们；出现问卷时自动让位。
 
@@ -158,7 +158,7 @@ GitHub PR 的状态与 Codeup 对齐：草稿 → 草稿；已获批准且可直
 
 **刷新时机**：会话开始、每轮对话结束、每 `mrPollSeconds` 秒，以及点「检查」或执行 `/mr` 时。
 
-### `docs` 飞书文档
+### `docs` 飞书文档与 Claude Artifacts
 
 **创建**的文档（绿色「创建」）来自：
 
@@ -176,6 +176,12 @@ GitHub PR 的状态与 Codeup 对齐：草稿 → 草稿；已获批准且可直
 **每行**：类型图标 · 类型（文档 / 知识库 / 表格 / 多维表 / 脑图 / 幻灯片 / 文件）· 创建 / 提及 · **标题（点击打开，悬停看全）** · `×`。类型和「创建 / 提及」分别对齐 MR 行的编号列与状态列。
 
 **标题从哪来**：每轮结束后在后台调用 `lark-cli drive +inspect` 查询，wiki 节点会解析到实际文档。查到标题或确认无权限后不再查；超时等临时失败会在之后的轮次重试，最多 3 次（`/docs` 也会触发重试）。查到之前先显示链接文字（如 `[设计方案](https://…)` 中的「设计方案」），否则显示「类型 + token 前缀」。
+
+**Claude Artifacts**（类型显示为 `Claude`，图标 `✦`）：
+
+- **创建**：本会话用 Artifact 工具发布的页面（`Published … at https://claude.ai/code/artifact/…`），以及 Claude Docs 连接器新建的文档。标题依次取发布文件的 `<title>`、调用的 `title` 参数、文件名。
+- **提及**：Artifact 工具 `read` / `open` 的页面（标题取读取结果），以及消息、Claude 的回答、其他工具调用参数里出现的 `claude.ai/code/artifact/…` 或 `claude.ai/artifact/…` 链接。Artifact 的 `list` 等操作输出的链接不计入。
+- 不调用 lark-cli；`docsArtifacts` 设为 `off` 后不显示 Artifacts。
 
 每个会话保留全部「创建」的文档和最近 30 篇「提及」的文档；`docsMentioned` 设为 `off` 后只显示创建的。
 
@@ -260,6 +266,7 @@ Desktop 的 Code 标签页没有 `/config`，用 `/hud set` 修改；终端里�
 | `docsMaxRows` | `3` | 文档最多行数，超出时可原地展开（1–10） |
 | `docsTitleWidth` | `40` | 文档标题列宽（10–120） |
 | `docsMentioned` | `on` | 显示提及的文档；`off` 时只显示创建的 |
+| `docsArtifacts` | `on` | 显示 Claude Artifacts |
 | `deployMaxRows` | `3` | 发布最多行数，超出时可原地展开（1–10） |
 | `deployPollSeconds` | `30` | 未结束发布的轮询间隔，单位为秒（10–600） |
 | `token` | — | 云效个人访问令牌（敏感字段，存于系统安全存储）；只能在 `/plugin configure` 或 `/config` 中设置 |
@@ -340,6 +347,7 @@ claude plugin test .
 
 ## 更新记录
 
+- **0.7.0**：文档模块支持 Claude Artifacts：本会话发布的页面（创建）、读取或提到的页面（提及），标题取发布文件的 `<title>`；新增 `docsArtifacts` 开关
 - **0.6.0**：MR 模块支持 GitHub PR：origin 在 GitHub 的仓库显示当前分支的 PR，消息、回答和命令输出里的 PR 链接（含 `gh pr create` 的输出）会被固定显示；检查项与 Codeup 一致，另含 CI 汇总；通过本机 `gh` 查询
 - **0.5.0**：发布识别支持一条命令多次 `deploy.sh`、输出只剩 `Flow run:` 行（直接查 Flow 运行状态），并排除 `--dry-run`；MR 模块显示本会话创建的 MR（按作者与创建时间查找，不依赖目录和分支）和消息、回答、命令输出里出现的 MR 链接
 - **0.4.3**：README 重写（目录、快速开始、虚构示例数据），测试数据脱敏
