@@ -1,7 +1,7 @@
 {
   "name": "session-hud",
-  "version": "0.5.0",
-  "description": "One HUD above the prompt: rate-limit usage, Codeup MRs, the session's Feishu docs and Yunxiao deploys; each module switchable, foldable",
+  "version": "0.6.0",
+  "description": "One HUD above the prompt: rate-limit usage, Codeup MRs and GitHub PRs, the session's Feishu docs and Yunxiao deploys; each module switchable, foldable",
   "author": {
     "name": "jasoncai0"
   },
@@ -18,8 +18,8 @@
     },
     "mr": {
       "type": "boolean",
-      "title": "模块：Codeup MR",
-      "description": "会话涉及仓库当前分支的 MR",
+      "title": "模块：MR / PR",
+      "description": "会话涉及仓库当前分支的 Codeup MR 与 GitHub PR",
       "default": true,
       "required": false
     },

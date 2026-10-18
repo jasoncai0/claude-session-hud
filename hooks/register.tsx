@@ -14,6 +14,8 @@ import { band, parseHud, status } from './hud'
 import { API_BASE, addPins, createdSince, diffStat, exportFromProfile, findMrLinks, isMrCreation, isOpen, parseRemote, pickMrs, repoLabel, stateOf, toView, tokenFromProfile } from './mr/codeup'
 import type { ApiChangeRequest, ApiCompare, ApiDetail, MrPin, Repo } from './mr/codeup'
 import { mrKey } from './mr/session'
+import { compareRange, findPrLinks, parseGithubRemote, pickPrs, prQuery, prView, prsOf } from './mr/github'
+import type { ApiPr, GhRepo } from './mr/github'
 import { dirsOf, mrList, rememberDirs } from './mr/session'
 import { mrLayout, mrSection } from './mr/view'
 import { MODULE_IDS, PLUGIN, settingsOf } from './settings'
@@ -52,6 +54,10 @@ const LOOKUPS_PER_TURN = 5
 /** Retryable lookup failures per document before its title is given up. */
 const MAX_LOOKUP_TRIES = 3
 const PROFILES = ['.zshrc', '.zshenv', '.zprofile', '.bashrc', '.profile']
+/** The Desktop app does not inherit the shell's PATH: gh is also looked for in the usual install folders. */
+const GH_CLI = ['gh', '/opt/homebrew/bin/gh', '/usr/local/bin/gh'] as const
+const GH_TIMEOUT_MS = 15_000
+const NO_GH = '未找到 gh CLI（安装后执行 gh auth login）'
 const NO_TOKEN = '未找到云效 token（设置 ALIBABA_CLOUD_YUNXIAO_ACCESS_TOKEN）'
 const NO_ORG = '未找到云效组织 ID（设置 ALIBABA_CLOUD_YUNXIAO_ORGANIZATION_ID）'
 const ORG_VAR = 'ALIBABA_CLOUD_YUNXIAO_ORGANIZATION_ID'
@@ -70,6 +76,8 @@ const stats = new Map<string, { additions: number; deletions: number }>()
 let tokenCache: { value: string | undefined } | null = null
 let orgCache: { value: string | undefined } | null = null
 let userIdCache: string | undefined
+/** The gh that ran; null once none was found. */
+let ghCli: string | null | undefined
 /** Release-stage names per `${app}/${workflowSn}`, read once: they name a tracked run's env. */
 const stageNames = new Map<string, Map<string, string>>()
 /** Run keys being fetched, so a press during a poll does not fetch twice. */
@@ -176,11 +184,55 @@ async function fetchMrs($: EngineInterface, token: string, repo: Repo, branch: s
   return mrViews($, token, repo, base, pickMrs(list, branch), () => head)
 }
 
+/**
+ * `gh <args>` parsed as JSON, through gh's own login. gh exits non-zero when a GraphQL answer carries errors next to
+ * its data (a pinned number that is no PR), so stdout is read whatever the exit; only no JSON at all is a failure.
+ */
+async function ghJson($: EngineInterface, args: readonly string[]): Promise<unknown> {
+  const candidates = ghCli === undefined ? GH_CLI : ghCli ? [ghCli] : []
+  for (const bin of candidates) {
+    const run = await $.process.run([bin, ...args], { timeoutMs: GH_TIMEOUT_MS }).catch((err: unknown) => (isMissingProgram(err) ? null : Promise.reject(err)))
+    if (run === null || run.exitCode === NOT_FOUND) continue
+    ghCli = bin
+    try {
+      return JSON.parse(run.stdout)
+    } catch {
+      throw new Error((run.stderr || run.stdout).trim().split('\n').slice(-1)[0]?.slice(0, 160) || `gh exit ${run.exitCode}`)
+    }
+  }
+  if (candidates.length) ghCli = null
+  throw new Error(NO_GH)
+}
+
+/** The PRs of `branch` (picked as for Codeup) and the PRs pinned by number, as rows, in one GraphQL call. */
+async function githubPrs($: EngineInterface, repo: GhRepo, branch: string | undefined, numbers: readonly number[]): Promise<MrView[]> {
+  const { branch: ofBranch, pinned } = prsOf(await ghJson($, ['api', 'graphql', '-f', `query=${prQuery(repo, branch, numbers)}`]))
+  const prs = [...pickPrs(ofBranch), ...pinned.filter(p => !ofBranch.some(b => b.number === p.number))]
+  return Promise.all(prs.map(async (pr: ApiPr) => {
+    const behind = pr.state === 'OPEN'
+      ? await ghJson($, ['api', `repos/${repo.owner}/${repo.name}/compare/${compareRange(pr)}`, '--jq', '{behind_by}'])
+        .then(c => (c as { behind_by?: number }).behind_by)
+        .catch(() => undefined)
+      : undefined
+    return prView(pr, repo, behind)
+  }))
+}
+
 /** Rows for the pinned MRs not already shown, one group per repo; a repo that fails says so in its group. */
-async function pinnedViews($: EngineInterface, token: string, pins: readonly MrPin[], shown: ReadonlySet<string>): Promise<RepoView[]> {
+async function pinnedViews($: EngineInterface, token: string | undefined, pins: readonly MrPin[], shown: ReadonlySet<string>): Promise<RepoView[]> {
+  const ghPins = pins.filter(p => p.forge === 'github' && !shown.has(`${p.repoPath}#${p.localId}`))
+  const ghByRepo = new Map<string, number[]>()
+  for (const p of ghPins) ghByRepo.set(p.repoPath, [...(ghByRepo.get(p.repoPath) ?? []), p.localId])
+  const github = await Promise.all([...ghByRepo].map(async ([path, ids]): Promise<RepoView> => {
+    const [owner = '', name = ''] = path.split('/')
+    return githubPrs($, { owner, name }, undefined, ids)
+      .then(mrs => ({ root: '', repo: path, branch: '', mrs }))
+      .catch((err: Error) => ({ root: '', repo: path, branch: '', mrs: [], error: err.message }))
+  }))
+  if (!token) return github
   const byRepo = new Map<string, number[]>()
-  for (const p of pins) if (!shown.has(`${repoLabel(p.repoPath)}!${p.localId}`)) byRepo.set(p.repoPath, [...(byRepo.get(p.repoPath) ?? []), p.localId])
-  return Promise.all([...byRepo].map(async ([path, ids]): Promise<RepoView> => {
+  for (const p of pins) if (p.forge !== 'github' && !shown.has(`${repoLabel(p.repoPath)}!${p.localId}`)) byRepo.set(p.repoPath, [...(byRepo.get(p.repoPath) ?? []), p.localId])
+  const codeup = await Promise.all([...byRepo].map(async ([path, ids]): Promise<RepoView> => {
     const repo: Repo = { org: path.split('/')[0] ?? '', path }
     const name = repoLabel(path)
     try {
@@ -192,6 +244,7 @@ async function pinnedViews($: EngineInterface, token: string, pins: readonly MrP
       return { root: '', repo: name, branch: '', mrs: [], error: err instanceof Error ? err.message : String(err) }
     }
   }))
+  return [...github, ...codeup]
 }
 
 /** Git roots of the session's cwd and of every directory it touched, cwd first, deduped. */
@@ -208,19 +261,33 @@ async function sessionRoots($: EngineInterface): Promise<string[]> {
   return found
 }
 
-async function repoView($: EngineInterface, token: string, root: string): Promise<RepoView | null> {
+async function repoView($: EngineInterface, token: string | undefined, root: string): Promise<RepoView | null> {
   const [remote, branch, upstream, local] = await Promise.all([
     git($, root, 'remote', 'get-url', 'origin'),
     git($, root, 'branch', '--show-current'),
     git($, root, 'rev-parse', '@{u}'),
     git($, root, 'rev-parse', 'HEAD'),
   ])
+  const gh = parseGithubRemote(remote)
+  if (gh && branch) {
+    const label = `${gh.owner}/${gh.name}`
+    return githubPrs($, gh, branch, [])
+      .then(mrs => ({ root, repo: label, branch, mrs }))
+      .catch((err: Error) => ({ root, repo: label, branch, mrs: [], error: err.message }))
+  }
+  if (!token) return null
   const repo = parseRemote(remote)
   if (!repo || !branch) return null
   const name = repoLabel(repo.path)
   return fetchMrs($, token, repo, branch, upstream || local)
     .then(mrs => ({ root, repo: name, branch, mrs }))
     .catch((err: Error) => ({ root, repo: name, branch, mrs: [], error: err.message }))
+}
+
+/** How many of `roots` are Codeup checkouts: the ones a missing Yunxiao token leaves out. */
+async function codeupRootCount($: EngineInterface, roots: readonly string[]): Promise<number> {
+  const remotes = await Promise.all(roots.map(root => git($, root, 'remote', 'get-url', 'origin')))
+  return remotes.filter(r => parseRemote(r) !== null).length
 }
 
 async function refreshMrs($: EngineInterface, settings: Settings) {
@@ -230,15 +297,14 @@ async function refreshMrs($: EngineInterface, settings: Settings) {
     await update($, mrView, () => null)
     return
   }
+  // GitHub repos need no Yunxiao token (gh has its own login); Codeup ones are left out without it, and say so.
   const token = await cachedToken($, settings)
-  if (!token) {
-    await update($, mrView, (): SessionView => ({ repos: [], error: NO_TOKEN }))
-    return
-  }
   const repos = (await Promise.all(found.map(root => repoView($, token, root)))).filter((r): r is RepoView => r !== null)
   const shown = new Set(repos.flatMap(r => r.mrs.map(mrKey)))
   const pinned = pins.length ? await pinnedViews($, token, pins, shown) : []
-  await update($, mrView, (): SessionView => ({ repos: [...repos, ...pinned] }))
+  const all = [...repos, ...pinned]
+  const needsToken = !token && (pins.some(p => p.forge !== 'github') || (await codeupRootCount($, found)) > 0)
+  await update($, mrView, (): SessionView => (needsToken ? { repos: all, error: NO_TOKEN } : { repos: all }))
 }
 
 async function pinMrs($: EngineInterface, settings: Settings, added: readonly MrPin[]) {
@@ -468,7 +534,7 @@ export const register: Register = (on, options) => {
   on('prompt.submit', async ($, e, next) => {
     if (settings.docs) await guard($, 'docs', () => rememberDocs($, findDocs(e.text), 'mentioned', settings))
     if (settings.deploy) await guard($, 'deploy', () => trackDeploys($, e.text, settings))
-    if (settings.mr) await guard($, 'mr', () => pinMrs($, settings, findMrLinks(e.text)))
+    if (settings.mr) await guard($, 'mr', () => pinMrs($, settings, [...findMrLinks(e.text), ...findPrLinks(e.text)]))
     return next(e)
   })
 
@@ -481,7 +547,8 @@ export const register: Register = (on, options) => {
     const output = !ran.isError && 'text' in ran && typeof ran.text === 'string' ? ran.text : ''
     if (settings.mr) {
       await guard($, 'mr', () => rememberMrDirs($, tool, input))
-      await guard($, 'mr', () => pinMrs($, settings, findMrLinks(`${JSON.stringify(input)}\n${output}`)))
+      const said = `${JSON.stringify(input)}\n${output}`
+      await guard($, 'mr', () => pinMrs($, settings, [...findMrLinks(said), ...findPrLinks(said)]))
       if (mrCreateStart !== undefined && !ran.isError) await guard($, 'mr', () => pinCreatedMrs($, settings, mrCreateStart))
     }
     if (settings.docs) await guard($, 'docs', () => rememberToolDocs($, tool, input, output, settings))
@@ -496,7 +563,7 @@ export const register: Register = (on, options) => {
     const answer = 'answer' in e && typeof e.answer === 'string' ? e.answer : ''
     await Promise.all([
       settings.mr && guard($, 'mr', async () => {
-        await pinMrs($, settings, findMrLinks(answer))
+        await pinMrs($, settings, [...findMrLinks(answer), ...findPrLinks(answer)])
         await refreshMrs($, settings)
       }),
       settings.docs && guard($, 'docs', () => rememberDocs($, findDocs(answer), 'mentioned', settings)),

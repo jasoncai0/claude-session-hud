@@ -4,14 +4,14 @@
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-%E2%89%A5%202.1.29x-d97757)](https://claude.com/claude-code)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-> A Claude Code mod that keeps one HUD above the prompt — rate-limit usage, the Codeup MRs of the branches you are on, the Feishu docs the session touched and the Yunxiao (AppStack) releases it triggered — in the Claude Desktop Code tab and the terminal.
+> A Claude Code mod that keeps one HUD above the prompt — rate-limit usage, the Codeup MRs and GitHub PRs of the branches you are on, the Feishu docs the session touched and the Yunxiao (AppStack) releases it triggered — in the Claude Desktop Code tab and the terminal.
 
 Claude Code 的一个 mod：在**输入框上方**常驻一块 HUD，把当前会话相关的四类信息放在一处：
 
 | 模块 | 显示什么 |
 | --- | --- |
 | **用量** `usage` | 5h / 7d 限额进度条与重置倒计时 |
-| **Codeup MR** `mr` | 会话涉及仓库当前分支的合并请求，可展开合入、落后、源分支删除、冲突、评审等检查 |
+| **MR / PR** `mr` | 会话涉及仓库当前分支的 Codeup MR 与 GitHub PR，可展开合入、落后、源分支删除、冲突、CI、评审等检查 |
 | **飞书文档** `docs` | 本会话创建或提到的飞书 / Lark 文档，点标题直达 |
 | **云效发布** `deploy` | 本会话触发（或跟踪）的 AppStack 发布，显示阶段链接和运行到哪一步 |
 
@@ -118,20 +118,22 @@ claude plugin update session-hud@claude-session-hud
 - `↻1h41m` 为距离重置的倒计时；重置时间已过（会话空闲后读数过期）的窗口自动隐藏
 - 数据随 Claude Code 的 `session.measure` 推送，**不轮询、不额外消耗 token**
 
-### `mr` Codeup 合并请求
+### `mr` Codeup MR / GitHub PR
 
-**涉及哪些仓库**：当前工作目录所在仓库，加上会话中编辑过文件、或通过 `cd <dir>` / `git -C <dir>` 操作过的仓库（绝对路径或 `~/`），最多 5 个。只识别 `origin` 指向 `codeup.aliyun.com` 的仓库（ssh / https 均可）。
+Codeup 与 GitHub 用同一套行和检查项：Codeup MR 编号显示为 `!128`，GitHub PR 显示为 `#128`。
+
+**涉及哪些仓库**：当前工作目录所在仓库，加上会话中编辑过文件、或通过 `cd <dir>` / `git -C <dir>` 操作过的仓库（绝对路径或 `~/`），最多 5 个。识别 `origin` 指向 `codeup.aliyun.com` 或 `github.com` 的仓库（ssh / https 均可）。
 
 **显示哪些 MR**：
 
 - 以上述仓库**当前分支**为源分支的 MR。有未关闭的就显示未关闭的（同一分支合往多个目标分支时各一行，最多 3 条）；全部已关闭时显示最近一条已合并 / 已关闭的。
 - **本会话创建的 MR**，无论在哪个目录、哪个分支创建：识别到创建 MR 的调用（`codeup-create-change-request`、对 `changeRequests` 接口的 POST、`git push -o merge_request.create`）后，按「作者 = 当前令牌所属用户、创建时间不早于这次调用」查出新建的 MR 并固定显示。不依赖调用的输出格式。
-- **提到的 MR**：消息、Claude 的回答或命令输出里出现的 Codeup MR 链接（`https://codeup.aliyun.com/…/change/<编号>`）。
+- **提到的 MR / PR**：消息、Claude 的回答或命令输出里出现的 Codeup MR 链接（`https://codeup.aliyun.com/…/change/<编号>`）或 GitHub PR 链接（`https://github.com/<owner>/<repo>/pull/<编号>`）。`gh pr create` 会输出新 PR 的链接，因此本会话创建的 PR 也会自动出现。
 
 | 列 | 说明 |
 | --- | --- |
 | `⑂` | MR 图标，颜色随状态；终端里也可点击跳转 |
-| `!128` | MR 编号，**点击打开 MR** |
+| `!128` / `#128` | Codeup MR / GitHub PR 编号，**点击打开** |
 | 状态 | 草稿 / 评审中 / 待合并 / 已合并 / 已关闭 |
 | 仓库 | `group/repo`，可用 `mrRepo` 关闭 |
 | 源 → 目标 | 分支名，超长时中间截断，悬停看全 |
@@ -139,17 +141,20 @@ claude plugin update session-hud@claude-session-hud
 | `检查 ⌄` | 展开 / 收起检查项，按钮上的符号取最差一项：`✕` > `○` > `✓` |
 | `×` | 在本会话中隐藏这条 MR |
 
-**检查项**（点「检查」时会立即从 Codeup 重新拉取）：
+**检查项**（点「检查」时会立即重新拉取）：
 
-| 检查 | 未关闭的 MR | 已合并的 MR | 已关闭的 MR |
+| 检查 | 未关闭的 MR / PR | 已合并的 | 已关闭的 |
 | --- | --- | --- | --- |
 | 合入 | ○ 待合入 N 个提交 | ✓ 已合入 目标分支 | ✕ 未合入（MR 已关闭） |
 | 同步 | ○ 落后 目标分支 N 个提交 / ✓ 已同步 | — | — |
 | 源分支 | ✓ 源分支存在 / ✕ 源分支已删除 | ○ 源分支未删除 / ✓ 源分支已删除 | ○ 源分支未删除 / ✓ 源分支已删除 |
-| 合并规则 | Codeup 的合并要求，如「合并冲突检查」 | 同左 | 同左 |
-| 冲突 | ✕ 存在冲突 | — | — |
-| 评审 | `评审 1/2`：全部通过为 ✓，有人拒绝为 ✕，否则 ○ | 同左 | 同左 |
-| 评论 | ○ 未解决评论 N | 同左 | 同左 |
+| 合并规则 | Codeup：合并要求，如「合并冲突检查」 | 同左 | 同左 |
+| 冲突 | ✕ 存在冲突（GitHub 另有 ✓ 无冲突） | — | — |
+| CI | GitHub：✓ CI 通过（N）/ ○ CI 运行中 x/N / ✕ CI 失败：检查名 | 同左 | 同左 |
+| 评审 | Codeup：`评审 1/2`，全部通过为 ✓，有人拒绝为 ✕，否则 ○；GitHub：✓ 评审通过 / ○ 待评审 / ✕ 评审要求修改 | 同左 | 同左 |
+| 评论 | ○ 未解决评论 N（GitHub 为未解决的评审讨论） | 同左 | 同左 |
+
+GitHub PR 的状态与 Codeup 对齐：草稿 → 草稿；已获批准且可直接合并 → 待合并；其余未关闭 → 评审中。
 
 **刷新时机**：会话开始、每轮对话结束、每 `mrPollSeconds` 秒，以及点「检查」或执行 `/mr` 时。
 
@@ -267,11 +272,13 @@ Desktop 的 Code 标签页没有 `/config`，用 `/hud set` 修改；终端里�
   2. 环境变量 `ALIBABA_CLOUD_YUNXIAO_ACCESS_TOKEN`
   3. `~/.zshrc`、`~/.zshenv`、`~/.zprofile`、`~/.bashrc`、`~/.profile` 中的 `export ALIBABA_CLOUD_YUNXIAO_ACCESS_TOKEN=...`（Desktop 不继承 shell 环境变量，所以会读这些文件）
 - **`deploy` 模块**还需要云效组织 ID，按以下顺序查找：环境变量 `ALIBABA_CLOUD_YUNXIAO_ORGANIZATION_ID`，shell 配置文件中的同名 export 行，最后取会话所在 Codeup 仓库 origin 中的组织 ID
+- **GitHub PR** 通过本机的 [`gh`](https://cli.github.com/) 查询（使用 `gh auth login` 的登录态，需要 `repo` 权限），会在 `PATH`、`/opt/homebrew/bin`、`/usr/local/bin` 中查找；不需要云效令牌
 - **`docs` 模块**显示链接无需额外依赖；显示标题需要已登录的 [`lark-cli`](https://github.com/larksuite/cli)，会在 `PATH`、`/opt/homebrew/bin`、`/usr/local/bin` 中查找
 
 ## 网络与隐私
 
 - **Codeup / AppStack / Flow**：只调用 `openapi-rdc.aliyuncs.com` 上的只读接口。Codeup 部分包括仓库、MR 列表（按仓库，或按作者查本会话新建的）、MR 详情、对比、分支；AppStack 部分包括阶段列表、阶段执行列表、流水线运行；Flow 部分是流水线运行；另外会查一次令牌所属用户的 ID。插件**不会触发、取消或推进**任何发布。token 只放在请求头里。
+- **GitHub**：通过本机 `gh` 只读查询（一次 GraphQL 取 PR 信息，未关闭的 PR 另调一次 compare 取落后提交数），使用你自己的 gh 登录态。
 - **飞书**：插件本身不发网络请求，标题查询通过本机的 `lark-cli` 完成，使用你自己的登录态。
 - **不上报任何数据**。状态（MR、文档、发布、折叠展开）只保存在当前会话里。
 
@@ -281,6 +288,7 @@ Desktop 的 Code 标签页没有 `/config`，用 `/hud set` 修改；终端里�
 | --- | --- |
 | 看不到 HUD | 当前会话启动于安装之前，新开一个会话；再用 `/hud` 确认模块已开启 |
 | 每行出现两遍 | 旧的 `usage-hud` / `codeup-mr` 没卸载，见[快速开始](#快速开始)第 2 步 |
+| GitHub 仓库显示「未找到 gh CLI」或报错 | 安装 `gh` 并执行 `gh auth login`；私有仓库需要 `repo` 权限 |
 | 显示「未找到云效 token」 | 按[依赖](#依赖)配置 token |
 | 没有 MR 行 | 仓库 origin 不在 Codeup 上；当前分支没有 MR；或该 MR 不在仓库最新的 100 条之内。在别处创建的 MR，可以在消息里贴它的链接 |
 | 文档只显示「文档 xxxxxxxx…」 | 未安装或未登录 `lark-cli`（终端执行 `lark-cli auth login`），或无该文档权限；临时失败会自动重试，也可执行 `/docs` 立即重试 |
@@ -332,6 +340,7 @@ claude plugin test .
 
 ## 更新记录
 
+- **0.6.0**：MR 模块支持 GitHub PR：origin 在 GitHub 的仓库显示当前分支的 PR，消息、回答和命令输出里的 PR 链接（含 `gh pr create` 的输出）会被固定显示；检查项与 Codeup 一致，另含 CI 汇总；通过本机 `gh` 查询
 - **0.5.0**：发布识别支持一条命令多次 `deploy.sh`、输出只剩 `Flow run:` 行（直接查 Flow 运行状态），并排除 `--dry-run`；MR 模块显示本会话创建的 MR（按作者与创建时间查找，不依赖目录和分支）和消息、回答、命令输出里出现的 MR 链接
 - **0.4.3**：README 重写（目录、快速开始、虚构示例数据），测试数据脱敏
 - **0.4.2**：超出最多行数时改为原地「⌄ 展开另 N … / ⌃ 收起」按钮（MR、文档、发布通用）；文档标题查询遇到超时等临时失败会重试

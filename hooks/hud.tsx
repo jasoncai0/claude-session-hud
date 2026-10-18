@@ -5,7 +5,7 @@ import type { SettingKey, Settings } from './settings'
 import { TOGGLE_W, gap } from './ui'
 import type { Section, Ui } from './ui'
 
-const MODULE_NAMES: Record<string, string> = { usage: '用量', mr: 'Codeup MR', docs: '飞书文档', deploy: '云效发布' }
+const MODULE_NAMES: Record<string, string> = { usage: '用量', mr: 'MR / PR', docs: '飞书文档', deploy: '云效发布' }
 
 export const HELP = [
   '用法：',

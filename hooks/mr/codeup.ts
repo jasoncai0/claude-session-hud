@@ -55,7 +55,7 @@ export type ApiCompare = { diffs?: { diff?: string }[] }
 export const isOpen = (cr: ApiChangeRequest) => !CLOSED_STATES.has(cr.state)
 
 /** An MR the session made or named, pinned to the band whatever branch its checkout is on. */
-export type MrPin = { repoPath: string; localId: number }
+export type MrPin = { repoPath: string; localId: number; forge?: 'github' }
 
 const MR_URL_RE = /https?:\/\/codeup\.aliyun\.com\/((?:[\w.-]+\/)+[\w.-]+?)\/change\/(\d+)/g
 /** A call that opens an MR: the devops CLI, a POST to the changeRequests API, or a push option asking Codeup to. */
@@ -87,7 +87,7 @@ export function createdSince(list: readonly ApiChangeRequest[], since: number): 
 
 /** Pins added, deduped, newest last. */
 export const addPins = (known: readonly MrPin[], added: readonly MrPin[]): MrPin[] => {
-  const key = (p: MrPin) => `${p.repoPath}!${p.localId}`
+  const key = (p: MrPin) => `${p.forge ?? 'codeup'}:${p.repoPath}!${p.localId}`
   const fresh = added.filter(p => !known.some(k => key(k) === key(p)))
   return [...known, ...fresh]
 }

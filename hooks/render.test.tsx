@@ -68,7 +68,24 @@ function world(on: On, { branch = 'feat', calls = [], extra = [], toolText = '',
       const title = String(e.argv[4]).includes('NewDoc') ? '新建的设计文档' : '权限设计（正式标题）'
       return { value: { exitCode: 0, stdout: JSON.stringify({ ok: true, data: { title } }), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     }
+    if (String(e.argv[0]).endsWith('gh')) {
+      calls.push(`gh ${e.argv.slice(1, 3).join(' ')}`)
+      const isCompare = String(e.argv[2]).includes('/compare/')
+      const ghPr = (n: number, ref: string) => ({
+        number: n, url: `https://github.com/acme/gh-app/pull/${n}`, title: `t${n}`, state: 'OPEN', isDraft: false, merged: false, additions: 12, deletions: 3,
+        headRefName: ref, baseRefName: 'main', headRef: { name: ref }, headRepositoryOwner: { login: 'acme' }, mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN', reviewDecision: 'APPROVED',
+        commits: { totalCount: 2, nodes: [{ commit: { statusCheckRollup: { state: 'FAILURE', contexts: { nodes: [{ __typename: 'CheckRun', name: 'build', status: 'COMPLETED', conclusion: 'FAILURE' }] } } } }] },
+        reviewThreads: { nodes: [] },
+      })
+      const query = String(e.argv[4] ?? '')
+      const body = isCompare ? { behind_by: 3 } : { data: { repository: { branch: { nodes: query.includes('headRefName') ? [ghPr(7, branch)] : [] }, ...(query.includes('n8:') ? { n8: ghPr(8, 'other') } : {}) } } }
+      return { value: { exitCode: 0, stdout: JSON.stringify(body), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    }
     const dir = e.argv[2] ?? ''
+    if (dir.startsWith('/w/gh-app')) {
+      const out = e.argv.includes('rev-parse') ? '/w/gh-app' : e.argv.includes('get-url') ? 'git@github.com:acme/gh-app.git' : branch
+      return { value: { exitCode: 0, stdout: `${out}\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    }
     const root = dir.startsWith('/w/billing-svc') ? '/w/billing-svc' : dir.startsWith('/w/demo-api') ? '/w/demo-api' : ''
     const name = root.split('/').at(-1)
     const out = !root ? '' : e.argv.includes('rev-parse') ? root : e.argv.includes('get-url') ? `git@codeup.aliyun.com:${ORG}/backend/${name}.git` : branch
@@ -292,6 +309,30 @@ test('a Codeup MR link in a prompt pins that MR', async ($, on) => {
   await $.prompt.submit({ text: `看下 https://codeup.aliyun.com/${ORG}/backend/demo-api/change/191` } as never)
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...BAND })
   expect(await ui.find({ type: 'Link', text: '!191' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a GitHub checkout the session works in shows its PR with the same checks, plus CI', async ($, on) => {
+  const calls: string[] = []
+  world(on, { calls })
+  await bash($, 'cd /w/gh-app && git status')
+  await $.turn.complete(turn())
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...BAND })
+  expect((await ui.find({ type: 'Link', text: '#7' }))?.props.href).toBe('https://github.com/acme/gh-app/pull/7')
+  expect(await ui.find({ type: 'Text', text: 'acme/gh-app' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '+12' })).toBeDefined()
+  await ui.press({ key: 'checks-acme/gh-app#7' })
+  expect(await ui.find({ type: 'Text', text: '落后 main 3 个提交' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'CI 失败：build' })).toBeDefined()
+  expect(calls.some(c => c.startsWith('gh api graphql'))).toBe(true)
+  await ui.unmount()
+})
+
+test('a GitHub PR link in a prompt pins that PR', async ($, on) => {
+  world(on, { branch: 'lonely' })
+  await $.prompt.submit({ text: '看下 https://github.com/acme/gh-app/pull/8' } as never)
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...BAND })
+  expect(await ui.find({ type: 'Link', text: '#8' })).toBeDefined()
   await ui.unmount()
 })
 

@@ -5,7 +5,7 @@ import type { Settings } from '../settings'
 import { DISMISS_W, ICON_W, ID_W, STATE_W, TOGGLE_W, capRows, cell, gap } from '../ui'
 import type { Fold, Section, Ui } from '../ui'
 import { CHECK_GLYPH, prIcon, stateOf, summarize, thousands } from './codeup'
-import { mrKey } from './session'
+import { mrKey, mrRef } from './session'
 
 /** Fixed column widths, in cells: every MR row lines up whatever its id, state or numbers. */
 const STATS_W = 16
@@ -106,7 +106,7 @@ function row(ui: Ui, mr: MrView, settings: Settings, isOpen: boolean, act: MrAct
     <Box key={`mr-${key}`} flexDirection="column">
       <Box height={1} flexWrap="nowrap" overflow="hidden" columnGap={1} alignItems="center">
         <Box width={ICON_W} flexShrink={0}>{icon(ui, mr)}</Box>
-        <Box width={ID_W} flexShrink={0}><Link href={mr.url} label={`!${mr.id}`} /></Box>
+        <Box width={ID_W} flexShrink={0}><Link href={mr.url} label={mrRef(mr)} /></Box>
         {cell(ui, { key: `mr-state-${key}`, text: s.label, width: STATE_W, color: s.tone })}
         {settings.mrRepo ? cell(ui, { key: `mr-repo-${key}`, text: mr.repo, width: settings.mrRepoWidth, dimColor: true }) : null}
         {cell(ui, { key: `mr-src-${key}`, text: mr.source, width: settings.mrSourceWidth, mode: 'middle', dimColor: true })}
@@ -129,7 +129,7 @@ function summary(ui: Ui, mrs: readonly MrView[]): RenderElement[] {
     const sum = CHECK_GLYPH[summarize(mr.checks)]
     return (
       <Box key={`mr-sum-${mrKey(mr)}`} columnGap={1} flexShrink={0}>
-        <Text color={stateOf(mr.state).tone}>⑂!{mr.id}</Text>
+        <Text color={stateOf(mr.state).tone}>⑂{mrRef(mr)}</Text>
         {mr.checks.length ? <Text color={sum.tone}>{sum.glyph}</Text> : null}
       </Box>
     )

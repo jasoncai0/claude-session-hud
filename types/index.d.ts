@@ -17,6 +17,8 @@ export type MrView = {
   additions?: number
   deletions?: number
   checks: Check[]
+  /** Where it lives; absent for Codeup. A GitHub PR is numbered `#n`, a Codeup MR `!n`. */
+  forge?: 'github'
 }
 
 /** One Codeup repo the session works in: its checkout, branch and the branch's MRs. */
@@ -95,7 +97,7 @@ declare module 'claude-code' {
       /** `${repo}!${id}` of MRs hidden from the band. */
       mrDismissed: string[]
       /** MRs the session opened (found by author and time) or linked, shown whatever branch is checked out. */
-      mrPinned: { repoPath: string; localId: number }[]
+      mrPinned: { repoPath: string; localId: number; forge?: 'github' }[]
       /** Newest first. */
       docs: DocLink[]
       /** Tokens hidden from the band. */
