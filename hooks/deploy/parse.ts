@@ -2,7 +2,10 @@ import type { DeployRun, DeployStage } from '../../types'
 
 const STAGE_URL_RE = /https:\/\/devops\.aliyun\.com\/appstack\/app\/([\w.-]+)\/workflow\/([0-9a-f]{32})\/stage\/([0-9a-f]{32})/
 const STAGE_URLS_RE = new RegExp(STAGE_URL_RE.source, 'g')
-const DEPLOY_SH_RE = /\bdeploy\.sh\s+([\w.-]+)\s+([\w.-]+)/
+/** One `deploy.sh <service> <env> [branch]` call; the words may be quoted or shell variables. */
+const DEPLOY_SH_RE = /\bdeploy\.sh\s+(\S+)\s+(\S+)(?:\s+([^\s-]\S*))?/g
+const FLOW_RUN_RE = /https:\/\/flow\.aliyun\.com\/pipelines\/(\d+)\/builds\/(\d+)/g
+const DRY_RUN_RE = /\s--(?:dry-run|cli-dry-run)\b/
 const EXECUTE_RE = /\bapp-stack-execute-change-request-release-stage\b/
 /** Runs kept per session; the oldest drop off. */
 const MAX_RUNS = 10
@@ -24,32 +27,65 @@ const target = (app: string, workflowSn: string, stageSn: string, extra: Partial
   ...Object.fromEntries(Object.entries(extra).filter(([, v]) => v)),
 })
 
+/** A word of the command as written: quotes dropped; a shell variable or substitution is not a value. */
+const literal = (word: string | undefined): string | undefined => {
+  const w = word?.replace(/^(['"])(.*)\1$/, '$2')
+  return w && !/[$`(){}]/.test(w) ? w : undefined
+}
+
+/** A Flow run page: what a release is when deploy.sh's output was cut down to its `Flow run:` line. */
+const flowTarget = (pipelineId: string, runId: string, extra: Partial<DeployTarget>): DeployTarget => ({
+  key: `flow/${pipelineId}`,
+  app: extra.app ?? `流水线 ${pipelineId}`,
+  workflowSn: '',
+  stageSn: '',
+  url: `https://flow.aliyun.com/pipelines/${pipelineId}/builds/${runId}`,
+  ...Object.fromEntries(Object.entries(extra).filter(([, v]) => v)),
+  flowPipelineId: pipelineId,
+  flowRunId: runId,
+})
+
 /**
- * The AppStack release stage a finished Bash call triggered, or null: a yunxiao-deploy `deploy.sh` run that printed
- * `Triggered.` and the stage page, or a direct `app-stack-execute-change-request-release-stage` call that did not fail.
- * A dry run prints no `Triggered.`, so it never counts.
+ * Every AppStack release a finished Bash call triggered, in the order it ran them. A command may run deploy.sh several
+ * times (a loop, one call per region) and cut its output down (`| grep "Flow run"`): the n-th `deploy.sh` call is
+ * paired with the n-th stage page and the n-th `Flow run:` link in the output, and either link is enough. The env and
+ * branch come from the call's words, or from its `Env:` / `Branch:` lines when it ran alone. A dry run (which still
+ * prints links to existing runs) and a failed call never count. A direct
+ * `app-stack-execute-change-request-release-stage` call counts by its flags.
  */
-export function triggerOf(tool: string, input: { command?: unknown }, output: string, isError: boolean): DeployTarget | null {
+export function triggersOf(tool: string, input: { command?: unknown }, output: string, isError: boolean): DeployTarget[] {
   const cmd = typeof input.command === 'string' ? input.command : ''
-  if (tool !== 'Bash' || isError || !cmd) return null
-  const deploySh = cmd.match(DEPLOY_SH_RE)
-  if (deploySh && /\bTriggered\b/.test(output)) {
-    const url = output.match(STAGE_URL_RE)
-    if (!url?.[1] || !url[2] || !url[3]) return null
-    const envLine = lineOf(output, 'Env') ?? ''
-    const branch = lineOf(output, 'Branch')
-    return target(url[1], url[2], url[3], {
-      env: envLine.split(/\s+/)[0] || deploySh[2],
-      stageName: envLine.match(/\(stage:\s*([^/)]+?)\s*(?:\/|\))/)?.[1],
-      branch: branch && !branch.startsWith('<') ? branch : undefined,
-      feature: lineOf(output, 'Labelled') ?? lineOf(output, 'Feature')?.replace(/^<none.*$/, ''),
-    })
+  if (tool !== 'Bash' || isError || !cmd || DRY_RUN_RE.test(cmd)) return []
+  const calls = [...cmd.matchAll(DEPLOY_SH_RE)]
+  if (calls.length) {
+    const stages = [...output.matchAll(STAGE_URLS_RE)]
+    const flows = [...output.matchAll(FLOW_RUN_RE)]
+    // A loop runs one call many times: then the links, not the calls, say how many releases there were.
+    const count = Math.max(stages.length, flows.length)
+    const isSingle = count === 1
+    return Array.from({ length: count }, (_, i) => {
+      // Past the last call, a loop is running it again: its literal words hold for every run, its variables for none.
+      const call = calls[Math.min(i, calls.length - 1)]
+      const envLine = isSingle ? lineOf(output, 'Env') ?? '' : ''
+      const branchLine = isSingle ? lineOf(output, 'Branch') : undefined
+      const extra: Partial<DeployTarget> = {
+        env: envLine.split(/\s+/)[0] || literal(call?.[2]),
+        stageName: envLine.match(/\(stage:\s*([^/)]+?)\s*(?:\/|\))/)?.[1],
+        branch: (branchLine && !branchLine.startsWith('<') ? branchLine : undefined) ?? literal(call?.[3]),
+        feature: isSingle ? lineOf(output, 'Labelled') ?? lineOf(output, 'Feature')?.replace(/^<none.*$/, '') : undefined,
+      }
+      const stage = stages[i]
+      const flow = flows[i]
+      const flowIds = flow?.[1] && flow[2] ? { flowPipelineId: flow[1], flowRunId: flow[2] } : {}
+      if (stage?.[1] && stage[2] && stage[3]) return { ...target(stage[1], stage[2], stage[3], extra), ...flowIds }
+      return flow?.[1] && flow[2] ? flowTarget(flow[1], flow[2], { ...extra, app: literal(call?.[1]) }) : null
+    }).filter((t): t is DeployTarget => t !== null)
   }
-  if (!EXECUTE_RE.test(cmd) || /--cli-dry-run\b/.test(cmd)) return null
+  if (!EXECUTE_RE.test(cmd)) return []
   const app = flagOf(cmd, 'app-name')
   const wf = flagOf(cmd, 'release-workflow-sn')
   const stage = flagOf(cmd, 'release-stage-sn')
-  return app && wf && stage ? target(app, wf, stage, {}) : null
+  return app && wf && stage ? [target(app, wf, stage, {})] : []
 }
 
 /** Every AppStack stage page linked in `text`, deduped: what a pasted link asks to track. */

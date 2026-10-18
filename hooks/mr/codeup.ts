@@ -31,6 +31,8 @@ export function exportFromProfile(text: string, name: string): string | undefine
 type ApiReviewer = { reviewOpinionStatus?: string }
 export type ApiChangeRequest = {
   localId: number
+  createdAt?: string
+  updatedAt?: string
   detailUrl: string
   title: string
   sourceBranch: string
@@ -51,6 +53,44 @@ export type ApiDetail = {
 export type ApiCompare = { diffs?: { diff?: string }[] }
 
 export const isOpen = (cr: ApiChangeRequest) => !CLOSED_STATES.has(cr.state)
+
+/** An MR the session made or named, pinned to the band whatever branch its checkout is on. */
+export type MrPin = { repoPath: string; localId: number }
+
+const MR_URL_RE = /https?:\/\/codeup\.aliyun\.com\/((?:[\w.-]+\/)+[\w.-]+?)\/change\/(\d+)/g
+/** A call that opens an MR: the devops CLI, a POST to the changeRequests API, or a push option asking Codeup to. */
+const MR_CREATE_RE = /\bcodeup-create-change-request\b|\bmerge_request\.create\b|\/changeRequests\b[^\n]*(?:-X\s*POST|--request\s+POST)|(?:-X\s*POST|--request\s+POST)[^\n]*\/changeRequests\b/
+
+/** Every Codeup MR page linked in `text`, deduped. */
+export function findMrLinks(text: string): MrPin[] {
+  const found = new Map<string, MrPin>()
+  for (const [, repoPath, id] of text.matchAll(MR_URL_RE)) {
+    if (repoPath && id && repoPath.includes('/')) found.set(`${repoPath}!${id}`, { repoPath, localId: Number(id) })
+  }
+  return [...found.values()]
+}
+
+/** A tool call that opens a Codeup MR, however it is spelled: what it made is then looked up by author and time. */
+export function isMrCreation(tool: string, input: { command?: unknown }): boolean {
+  if (tool === 'Bash') return typeof input.command === 'string' && MR_CREATE_RE.test(input.command)
+  return /codeup/i.test(tool) && /create/i.test(tool) && /change|merge/i.test(tool)
+}
+
+/** The MRs in an author's newest-first list created at or after `since` (epoch ms): what one call just opened. */
+export function createdSince(list: readonly ApiChangeRequest[], since: number): MrPin[] {
+  return list.flatMap(cr => {
+    const at = Date.parse(cr.createdAt ?? '')
+    const pin = findMrLinks(cr.detailUrl)[0]
+    return pin && !Number.isNaN(at) && at >= since ? [pin] : []
+  })
+}
+
+/** Pins added, deduped, newest last. */
+export const addPins = (known: readonly MrPin[], added: readonly MrPin[]): MrPin[] => {
+  const key = (p: MrPin) => `${p.repoPath}!${p.localId}`
+  const fresh = added.filter(p => !known.some(k => key(k) === key(p)))
+  return [...known, ...fresh]
+}
 
 /** Open MRs of the branch (newest first, capped); none open → the latest closed/merged one. */
 export function pickMrs<T extends ApiChangeRequest>(list: readonly T[], branch: string): T[] {

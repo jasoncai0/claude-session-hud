@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { branchChecks, checksOf, diffStat, repoLabel, thousands, parseRemote, pickMrs, stateOf, summarize, toView, tokenFromProfile } from './codeup'
+import { addPins, branchChecks, checksOf, createdSince, findMrLinks, isMrCreation, diffStat, repoLabel, thousands, parseRemote, pickMrs, stateOf, summarize, toView, tokenFromProfile } from './codeup'
 import type { ApiChangeRequest } from './codeup'
 
 const ORG = 'my-org-id'
@@ -106,4 +106,26 @@ test('branchChecks: merged MR passes once its source branch is deleted; closed M
     { label: '源分支已删除', status: 'pass' },
   ])
   expect(branchChecks(cr(6, 'feat', 'CLOSED'), undefined, undefined)).toEqual([{ label: '未合入（MR 已关闭）', status: 'fail' }])
+})
+
+test('findMrLinks reads Codeup MR pages; isMrCreation recognises the ways an MR is opened', () => {
+  expect(findMrLinks(`见 https://codeup.aliyun.com/${ORG}/backend/demo-api/change/205 与 https://codeup.aliyun.com/${ORG}/backend/demo-api/change/206/diffs`))
+    .toEqual([{ repoPath: `${ORG}/backend/demo-api`, localId: 205 }, { repoPath: `${ORG}/backend/demo-api`, localId: 206 }])
+  expect(findMrLinks(`https://codeup.aliyun.com/${ORG}/backend/demo-api`)).toEqual([])
+  expect(isMrCreation('Bash', { command: 'yx codeup-create-change-request --repository-id 1 --source-branch a --target-branch b' })).toBe(true)
+  expect(isMrCreation('Bash', { command: 'curl -X POST -H "x" https://openapi-rdc.aliyuncs.com/oapi/v1/codeup/organizations/o/repositories/1/changeRequests -d @b.json' })).toBe(true)
+  expect(isMrCreation('Bash', { command: 'git push -o merge_request.create origin HEAD' })).toBe(true)
+  expect(isMrCreation('Bash', { command: 'curl https://openapi-rdc.aliyuncs.com/oapi/v1/codeup/organizations/o/changeRequests?state=all' })).toBe(false)
+  expect(isMrCreation('mcp__codeup__create_change_request', {})).toBe(true)
+})
+
+test('createdSince keeps the MRs created at or after the call; addPins dedupes', () => {
+  const at = Date.parse('2026-10-18T04:15:00Z')
+  const list = [
+    { ...cr(206, 'b', 'UNDER_REVIEW'), detailUrl: `https://codeup.aliyun.com/${ORG}/backend/demo-api/change/206`, createdAt: '2026-10-18T12:15:20+08:00' },
+    { ...cr(204, 'a', 'MERGED'), detailUrl: `https://codeup.aliyun.com/${ORG}/backend/demo-api/change/204`, createdAt: '2026-10-17T00:42:27+08:00' },
+  ]
+  const pins = createdSince(list, at)
+  expect(pins).toEqual([{ repoPath: `${ORG}/backend/demo-api`, localId: 206 }])
+  expect(addPins(pins, [...pins, { repoPath: 'x/y', localId: 1 }])).toHaveLength(2)
 })

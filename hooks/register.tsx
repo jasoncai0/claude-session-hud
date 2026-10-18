@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { DeployRun, DocLink, DocOrigin, MrView, RepoView, SessionView, Usage } from '../types'
-import { addRun, envOfStage, findStageTargets, isSettled, pickExecution, runOf, triggerOf } from './deploy/parse'
+import { addRun, envOfStage, findStageTargets, isSettled, pickExecution, runOf, triggersOf } from './deploy/parse'
 import type { ApiPipelineRun } from './deploy/parse'
 import { deployList, deploySection } from './deploy/view'
 import { findDocs, isCreation, isLarkTool, mergeDocs } from './docs/links'
@@ -11,8 +11,9 @@ import { LARK_CLI, inspectArgv, isMissingProgram, lookupOf } from './docs/lookup
 import type { Lookup } from './docs/lookup'
 import { docList, docsLayout, docsSection, visibleDocs } from './docs/view'
 import { band, parseHud, status } from './hud'
-import { API_BASE, diffStat, exportFromProfile, isOpen, parseRemote, pickMrs, repoLabel, stateOf, toView, tokenFromProfile } from './mr/codeup'
-import type { ApiChangeRequest, ApiCompare, ApiDetail, Repo } from './mr/codeup'
+import { API_BASE, addPins, createdSince, diffStat, exportFromProfile, findMrLinks, isMrCreation, isOpen, parseRemote, pickMrs, repoLabel, stateOf, toView, tokenFromProfile } from './mr/codeup'
+import type { ApiChangeRequest, ApiCompare, ApiDetail, MrPin, Repo } from './mr/codeup'
+import { mrKey } from './mr/session'
 import { dirsOf, mrList, rememberDirs } from './mr/session'
 import { mrLayout, mrSection } from './mr/view'
 import { MODULE_IDS, PLUGIN, settingsOf } from './settings'
@@ -26,6 +27,7 @@ const mrView = atom({ plugin: 'session-hud', key: 'mrView' } as const, null)
 const mrDirs = atom({ plugin: 'session-hud', key: 'mrDirs' } as const, [])
 const mrExpanded = atom({ plugin: 'session-hud', key: 'mrExpanded' } as const, null)
 const mrDismissed = atom({ plugin: 'session-hud', key: 'mrDismissed' } as const, [])
+const mrPinned = atom({ plugin: 'session-hud', key: 'mrPinned' } as const, [])
 const docs = atom({ plugin: 'session-hud', key: 'docs' } as const, [])
 const docsDismissed = atom({ plugin: 'session-hud', key: 'docsDismissed' } as const, [])
 const collapsed = atom({ plugin: 'session-hud', key: 'collapsed' } as const, null)
@@ -35,6 +37,10 @@ const deployDismissed = atom({ plugin: 'session-hud', key: 'deployDismissed' } a
 const expandedLists = atom({ plugin: 'session-hud', key: 'expandedLists' } as const, [])
 
 const PAGE_SIZE = 100
+/** An author's newest MRs read after a create call: more than one call opens. */
+const AUTHOR_PAGE = 10
+/** How much earlier than the create call an MR may be stamped and still be its (clock skew). */
+const CREATE_SLACK_MS = 60_000
 const HTTP_NOT_FOUND = 404
 const MAX_REPOS = 5
 const GIT_TIMEOUT_MS = 5_000
@@ -50,6 +56,7 @@ const NO_TOKEN = '未找到云效 token（设置 ALIBABA_CLOUD_YUNXIAO_ACCESS_TO
 const NO_ORG = '未找到云效组织 ID（设置 ALIBABA_CLOUD_YUNXIAO_ORGANIZATION_ID）'
 const ORG_VAR = 'ALIBABA_CLOUD_YUNXIAO_ORGANIZATION_ID'
 const APPSTACK_BASE = 'https://openapi-rdc.aliyuncs.com/oapi/v1/appstack/organizations'
+const FLOW_BASE = 'https://openapi-rdc.aliyuncs.com/oapi/v1/flow/organizations'
 /** A just-triggered stage needs a moment before its execution is listed. */
 const DEPLOY_FIRST_CHECK_MS = 5_000
 
@@ -62,6 +69,7 @@ const roots = new Map<string, string>()
 const stats = new Map<string, { additions: number; deletions: number }>()
 let tokenCache: { value: string | undefined } | null = null
 let orgCache: { value: string | undefined } | null = null
+let userIdCache: string | undefined
 /** Release-stage names per `${app}/${workflowSn}`, read once: they name a tracked run's env. */
 const stageNames = new Map<string, Map<string, string>>()
 /** Run keys being fetched, so a press during a poll does not fetch twice. */
@@ -127,21 +135,31 @@ async function isBranchAlive($: EngineInterface, token: string, base: string, br
   return res.ok ? true : res.status === HTTP_NOT_FOUND ? false : undefined
 }
 
-async function fetchMrs($: EngineInterface, token: string, repo: Repo, branch: string, head: string): Promise<MrView[]> {
-  let repoId = repoIds.get(repo.path)
-  if (repoId === undefined) {
-    repoId = (await api<{ id: number }>($, token, `${repo.org}/repositories/${encodeURIComponent(repo.path)}`)).id
-    repoIds.set(repo.path, repoId)
-  }
-  const base = `${repo.org}/repositories/${repoId}`
-  // ponytail: Codeup ignores sourceBranch filtering, so scan the newest 100 MRs; page further if old branches matter
+async function repoIdOf($: EngineInterface, token: string, repo: Repo): Promise<number> {
+  const known = repoIds.get(repo.path)
+  if (known !== undefined) return known
+  const id = (await api<{ id: number }>($, token, `${repo.org}/repositories/${encodeURIComponent(repo.path)}`)).id
+  repoIds.set(repo.path, id)
+  return id
+}
+
+/** A repo's newest MRs. ponytail: Codeup ignores sourceBranch filtering, so scan the newest 100; page further if old branches matter */
+async function repoMrs($: EngineInterface, token: string, repo: Repo): Promise<{ base: string; list: ApiChangeRequest[] }> {
+  const repoId = await repoIdOf($, token, repo)
   const list = await api<ApiChangeRequest[]>($, token, `${repo.org}/changeRequests?projectIds=${repoId}&state=all&perPage=${PAGE_SIZE}`)
-  const picked = pickMrs(list, branch)
-  // One branch lookup per repo: every picked MR has this branch as its source.
-  const isAlive = picked.length ? await isBranchAlive($, token, base, branch) : undefined
+  return { base: `${repo.org}/repositories/${repoId}`, list }
+}
+
+/**
+ * Rows for `crs`: detail checks, +/- stats (fetched again only when `versionOf` changes) and whether each source branch
+ * still exists (one lookup per branch).
+ */
+async function mrViews($: EngineInterface, token: string, repo: Repo, base: string, crs: readonly ApiChangeRequest[], versionOf: (cr: ApiChangeRequest) => string): Promise<MrView[]> {
+  const branches = [...new Set(crs.map(cr => cr.sourceBranch))]
+  const alive = new Map(await Promise.all(branches.map(async b => [b, await isBranchAlive($, token, base, b)] as const)))
   // ponytail: the stats key ignores the target branch moving; add its sha if merged-in target commits must show
-  return Promise.all(picked.map(async cr => {
-    const key = `${repo.path}!${cr.localId}@${head}`
+  return Promise.all(crs.map(async cr => {
+    const key = `${repo.path}!${cr.localId}@${versionOf(cr)}`
     const [detail, stat] = await Promise.all([
       api<ApiDetail>($, token, `${base}/changeRequests/${cr.localId}`).catch(() => undefined),
       !isOpen(cr) ? undefined : stats.get(key) ?? api<ApiCompare>($, token, `${base}/compares?from=${encodeURIComponent(cr.targetBranch)}&to=${encodeURIComponent(cr.sourceBranch)}`)
@@ -149,7 +167,30 @@ async function fetchMrs($: EngineInterface, token: string, repo: Repo, branch: s
         .then(s => (stats.set(key, s), s))
         .catch(() => undefined),
     ])
-    return toView(cr, repo.path, detail, stat, isAlive)
+    return toView(cr, repo.path, detail, stat, alive.get(cr.sourceBranch))
+  }))
+}
+
+async function fetchMrs($: EngineInterface, token: string, repo: Repo, branch: string, head: string): Promise<MrView[]> {
+  const { base, list } = await repoMrs($, token, repo)
+  return mrViews($, token, repo, base, pickMrs(list, branch), () => head)
+}
+
+/** Rows for the pinned MRs not already shown, one group per repo; a repo that fails says so in its group. */
+async function pinnedViews($: EngineInterface, token: string, pins: readonly MrPin[], shown: ReadonlySet<string>): Promise<RepoView[]> {
+  const byRepo = new Map<string, number[]>()
+  for (const p of pins) if (!shown.has(`${repoLabel(p.repoPath)}!${p.localId}`)) byRepo.set(p.repoPath, [...(byRepo.get(p.repoPath) ?? []), p.localId])
+  return Promise.all([...byRepo].map(async ([path, ids]): Promise<RepoView> => {
+    const repo: Repo = { org: path.split('/')[0] ?? '', path }
+    const name = repoLabel(path)
+    try {
+      const { base, list } = await repoMrs($, token, repo)
+      const crs = list.filter(cr => ids.includes(cr.localId))
+      // A pinned MR has no checkout to read a head from: its last update stands in, so new pushes refetch the stats.
+      return { root: '', repo: name, branch: '', mrs: await mrViews($, token, repo, base, crs, cr => cr.updatedAt ?? '') }
+    } catch (err) {
+      return { root: '', repo: name, branch: '', mrs: [], error: err instanceof Error ? err.message : String(err) }
+    }
   }))
 }
 
@@ -184,7 +225,8 @@ async function repoView($: EngineInterface, token: string, root: string): Promis
 
 async function refreshMrs($: EngineInterface, settings: Settings) {
   const found = await sessionRoots($)
-  if (!found.length) {
+  const pins = listOf<MrPin>(await read($, mrPinned))
+  if (!found.length && !pins.length) {
     await update($, mrView, () => null)
     return
   }
@@ -194,7 +236,33 @@ async function refreshMrs($: EngineInterface, settings: Settings) {
     return
   }
   const repos = (await Promise.all(found.map(root => repoView($, token, root)))).filter((r): r is RepoView => r !== null)
-  await update($, mrView, (): SessionView => ({ repos }))
+  const shown = new Set(repos.flatMap(r => r.mrs.map(mrKey)))
+  const pinned = pins.length ? await pinnedViews($, token, pins, shown) : []
+  await update($, mrView, (): SessionView => ({ repos: [...repos, ...pinned] }))
+}
+
+async function pinMrs($: EngineInterface, settings: Settings, added: readonly MrPin[]) {
+  if (!added.length) return
+  const known = listOf<MrPin>(await read($, mrPinned))
+  const next = addPins(known, added)
+  if (next.length === known.length) return
+  await update($, mrPinned, () => next)
+  await refreshMrs($, settings)
+}
+
+/**
+ * The MRs a create call just opened: the token owner's newest MRs created since the call started. Read by author and
+ * time, not from the call's output, so it works however the call printed (or hid) what it made.
+ */
+async function pinCreatedMrs($: EngineInterface, settings: Settings, since: number) {
+  const token = await cachedToken($, settings)
+  orgCache ??= { value: await resolveOrg($) }
+  const org = orgCache.value
+  if (!token || !org) return
+  userIdCache ??= (await getJson<{ id?: string }>($, token, 'https://openapi-rdc.aliyuncs.com/oapi/v1/platform/user', 'Yunxiao')).id
+  if (!userIdCache) return
+  const list = await api<ApiChangeRequest[]>($, token, `${org}/changeRequests?authorIds=${userIdCache}&state=all&perPage=${AUTHOR_PAGE}&orderBy=created_at&sort=desc`)
+  await pinMrs($, settings, createdSince(list, since - CREATE_SLACK_MS))
 }
 
 async function rememberMrDirs($: EngineInterface, tool: string, input: Readonly<Record<string, unknown>>) {
@@ -278,7 +346,7 @@ async function resolveOrg($: EngineInterface): Promise<string | undefined> {
 
 /** The stage's name and env, for a run whose trigger did not print them (a tracked link, a direct API call). */
 async function stageOf($: EngineInterface, token: string, org: string, r: DeployRun): Promise<Partial<DeployRun>> {
-  if (r.stageName) return {}
+  if (r.stageName || !r.stageSn) return {}
   const key = `${r.app}/${r.workflowSn}`
   if (!stageNames.has(key)) {
     const briefs = await getJson<{ sn?: unknown; name?: unknown }[]>($, token, `${APPSTACK_BASE}/${org}/apps/${encodeURIComponent(r.app)}/releaseWorkflow/${r.workflowSn}/releaseStageBriefs`, 'AppStack')
@@ -288,8 +356,17 @@ async function stageOf($: EngineInterface, token: string, org: string, r: Deploy
   return name ? { stageName: name, ...(r.env ? {} : { env: envOfStage(name) }) } : {}
 }
 
-/** The run's execution (found once, then pinned) and its stages' jobs as Yunxiao has them now. */
+/**
+ * The run's stages' jobs as Yunxiao has them now. A run whose Flow run is known is read from it directly; otherwise its
+ * stage execution is found once (the latest that started after the trigger) and pinned.
+ */
 async function fetchRun($: EngineInterface, token: string, org: string, r: DeployRun): Promise<Partial<DeployRun>> {
+  if (r.flowPipelineId && r.flowRunId) {
+    const stage = await stageOf($, token, org, r).catch(() => ({}))
+    const flowRun = await getJson<ApiPipelineRun['pipelineRun']>($, token, `${FLOW_BASE}/${org}/pipelines/${r.flowPipelineId}/runs/${r.flowRunId}`, 'Flow')
+    const { branch, ...run } = runOf({ pipelineRun: flowRun })
+    return { ...stage, number: r.flowRunId, ...run, ...(r.branch || !branch ? {} : { branch }) }
+  }
   const base = `${APPSTACK_BASE}/${org}/apps/${encodeURIComponent(r.app)}/releaseWorkflows/${r.workflowSn}/releaseStages/${r.stageSn}/executions`
   const stage = await stageOf($, token, org, r).catch(() => ({}))
   const latest = r.number === undefined ? (await getJson<{ data?: { number?: unknown; startTime?: unknown }[] }>($, token, `${base}?perPage=1&page=1`, 'AppStack')).data?.[0] : undefined
@@ -326,11 +403,11 @@ async function refreshDeploys($: EngineInterface, settings: Settings, key?: stri
 }
 
 async function rememberDeploy($: EngineInterface, tool: string, input: Readonly<Record<string, unknown>>, output: string, isError: boolean, settings: Settings) {
-  const t = triggerOf(tool, input, output, isError)
-  if (!t) return
+  const triggered = triggersOf(tool, input, output, isError)
+  if (!triggered.length) return
   const now = await $.clock.now()
-  await update($, deploys, list => addRun(listOf<DeployRun>(list), t, now))
-  $.clock.after(DEPLOY_FIRST_CHECK_MS, () => void guard($, 'deploy', () => refreshDeploys($, settings, t.key)))
+  await update($, deploys, list => triggered.reduceRight((runs, t) => addRun(runs, t, now), listOf<DeployRun>(list)))
+  for (const t of triggered) $.clock.after(DEPLOY_FIRST_CHECK_MS, () => void guard($, 'deploy', () => refreshDeploys($, settings, t.key)))
 }
 
 /** Tracks the AppStack stages linked in `text` without deploying anything: each shows its latest run. */
@@ -391,15 +468,22 @@ export const register: Register = (on, options) => {
   on('prompt.submit', async ($, e, next) => {
     if (settings.docs) await guard($, 'docs', () => rememberDocs($, findDocs(e.text), 'mentioned', settings))
     if (settings.deploy) await guard($, 'deploy', () => trackDeploys($, e.text, settings))
+    if (settings.mr) await guard($, 'mr', () => pinMrs($, settings, findMrLinks(e.text)))
     return next(e)
   })
 
   on('tool.call', async ($, e, next) => {
-    const ran = await next(e)
     const { tool, ...input } = e
+    // An MR-opening call is timed from before it runs: what it opened is then found by author and creation time.
+    const mrCreateStart = settings.mr && isMrCreation(tool, input as { command?: unknown }) ? await $.clock.now() : undefined
+    const ran = await next(e)
     // A failed call's error text is no output: nothing it names was made.
     const output = !ran.isError && 'text' in ran && typeof ran.text === 'string' ? ran.text : ''
-    if (settings.mr) await guard($, 'mr', () => rememberMrDirs($, tool, input))
+    if (settings.mr) {
+      await guard($, 'mr', () => rememberMrDirs($, tool, input))
+      await guard($, 'mr', () => pinMrs($, settings, findMrLinks(`${JSON.stringify(input)}\n${output}`)))
+      if (mrCreateStart !== undefined && !ran.isError) await guard($, 'mr', () => pinCreatedMrs($, settings, mrCreateStart))
+    }
     if (settings.docs) await guard($, 'docs', () => rememberToolDocs($, tool, input, output, settings))
     if (settings.deploy) await guard($, 'deploy', () => rememberDeploy($, tool, input, 'text' in ran && typeof ran.text === 'string' ? ran.text : '', Boolean(ran.isError), settings))
     return ran
@@ -411,7 +495,10 @@ export const register: Register = (on, options) => {
     if (e.agentId) return result
     const answer = 'answer' in e && typeof e.answer === 'string' ? e.answer : ''
     await Promise.all([
-      settings.mr && guard($, 'mr', () => refreshMrs($, settings)),
+      settings.mr && guard($, 'mr', async () => {
+        await pinMrs($, settings, findMrLinks(answer))
+        await refreshMrs($, settings)
+      }),
       settings.docs && guard($, 'docs', () => rememberDocs($, findDocs(answer), 'mentioned', settings)),
     ])
     // Title lookups run lark-cli (seconds each): off the turn's path, on a timer.

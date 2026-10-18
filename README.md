@@ -122,7 +122,11 @@ claude plugin update session-hud@claude-session-hud
 
 **涉及哪些仓库**：当前工作目录所在仓库，加上会话中编辑过文件、或通过 `cd <dir>` / `git -C <dir>` 操作过的仓库（绝对路径或 `~/`），最多 5 个。只识别 `origin` 指向 `codeup.aliyun.com` 的仓库（ssh / https 均可）。
 
-**显示哪些 MR**：以当前分支为源分支的 MR。有未关闭的就显示未关闭的（同一分支合往多个目标分支时各一行，最多 3 条）；全部已关闭时显示最近一条已合并 / 已关闭的。
+**显示哪些 MR**：
+
+- 以上述仓库**当前分支**为源分支的 MR。有未关闭的就显示未关闭的（同一分支合往多个目标分支时各一行，最多 3 条）；全部已关闭时显示最近一条已合并 / 已关闭的。
+- **本会话创建的 MR**，无论在哪个目录、哪个分支创建：识别到创建 MR 的调用（`codeup-create-change-request`、对 `changeRequests` 接口的 POST、`git push -o merge_request.create`）后，按「作者 = 当前令牌所属用户、创建时间不早于这次调用」查出新建的 MR 并固定显示。不依赖调用的输出格式。
+- **提到的 MR**：消息、Claude 的回答或命令输出里出现的 Codeup MR 链接（`https://codeup.aliyun.com/…/change/<编号>`）。
 
 | 列 | 说明 |
 | --- | --- |
@@ -174,13 +178,14 @@ claude plugin update session-hud@claude-session-hud
 
 **记录哪些发布**：本会话里在 Bash 中成功触发的 AppStack 研发阶段。
 
-- **发布脚本**：命令中含 `deploy.sh <服务> <环境>`，且输出包含 `Triggered.` 和 AppStack 阶段链接（`--dry-run` 不输出 `Triggered.`，因此不计）。输出中的以下行会被读取，用来填环境、阶段名、分支和发布说明：
+- **发布脚本**：命令中含 `deploy.sh <服务> <环境> [分支]`，且输出中有 AppStack 阶段链接或 `Flow run:` 运行链接（任一即可）。一条命令里可以有多次调用（逐条写或用循环），第 N 次调用对应输出中第 N 个链接；输出被 `grep` 过滤到只剩 `Flow run:` 行也能识别。命令带 `--dry-run` 时一律不计（dry-run 仍会打印已有运行的链接）。单次调用时，输出中的以下行会被读取，用来填环境、阶段名、分支和发布说明；多次调用时取命令里写明的服务、环境、分支（变量不取）：
 
   ```
    Env     : prod  (stage: 生产 / workflow: 标准发布流程)
    Branch  : release/online
    Feature : 本次发布说明
   Triggered. View: https://devops.aliyun.com/appstack/app/<应用>/workflow/<流程 SN>/stage/<阶段 SN>/current
+  Flow run:      https://flow.aliyun.com/pipelines/<流水线 ID>/builds/<运行号>
   ```
 
 - **直接调用 CLI**：`aliyun devops app-stack-execute-change-request-release-stage --app-name … --release-workflow-sn … --release-stage-sn …`，未失败且不是 `--cli-dry-run` 时计入。
@@ -194,13 +199,13 @@ claude plugin update session-hud@claude-session-hud
 | `⇪` | 颜色随运行状态 |
 | 环境 | `prod` / `pre` / `test`，对齐 MR 的编号列 |
 | 状态 | 查询中 / 运行中 / 待确认 / 成功 / 失败 / 已取消，对齐 MR 的状态列 |
-| 应用 | AppStack 应用名，**点击打开该阶段的 AppStack 页面** |
+| 应用 | AppStack 应用名，**点击打开该阶段的 AppStack 页面**（只有 Flow 运行链接时打开 Flow 运行页） |
 | 分支 | 本次发布的分支，超长时中间截断 |
 | 进度 | 停在或正在执行的任务，以及已完成数 / 总任务数，如 `✕ 灰度人工卡点 (5/9)`；全部完成时显示最后一个任务 `✓` |
 | `检查 ⌄` | 展开各阶段下每个任务的状态，并**立即重新查询**（已结束的运行也会查） |
 | `×` | 在本会话中隐藏这次发布 |
 
-**状态从哪来**：先查该阶段最新一次执行（开始时间不早于触发时间，允许 2 分钟时钟误差），找到后记下执行序号，再查这次执行的流水线运行（`executions/{序号}:getPipelineRun`），得到各阶段、各任务的状态。
+**状态从哪来**：已知 Flow 运行（输出里有 `Flow run:` 链接）时，直接查这次运行（`pipelines/{ID}/runs/{运行号}`）。否则先查该阶段最新一次执行（开始时间不早于触发时间，允许 2 分钟时钟误差），找到后记下执行序号，再查这次执行的流水线运行（`executions/{序号}:getPipelineRun`）。两种方式都能拿到各阶段、各任务的状态。
 
 **刷新时机**：触发后 5 秒查第一次；之后每 `deployPollSeconds` 秒只查**尚未结束**的运行，结束（成功 / 失败 / 已取消）后不再轮询；点「检查」或执行 `/deploys` 时立即查询。
 
@@ -266,7 +271,7 @@ Desktop 的 Code 标签页没有 `/config`，用 `/hud set` 修改；终端里�
 
 ## 网络与隐私
 
-- **Codeup / AppStack**：只调用 `openapi-rdc.aliyuncs.com` 上的只读接口。Codeup 部分包括仓库、MR 列表、MR 详情、对比、分支；AppStack 部分包括阶段列表、阶段执行列表、流水线运行。插件**不会触发、取消或推进**任何发布。token 只放在请求头里。
+- **Codeup / AppStack / Flow**：只调用 `openapi-rdc.aliyuncs.com` 上的只读接口。Codeup 部分包括仓库、MR 列表（按仓库，或按作者查本会话新建的）、MR 详情、对比、分支；AppStack 部分包括阶段列表、阶段执行列表、流水线运行；Flow 部分是流水线运行；另外会查一次令牌所属用户的 ID。插件**不会触发、取消或推进**任何发布。token 只放在请求头里。
 - **飞书**：插件本身不发网络请求，标题查询通过本机的 `lark-cli` 完成，使用你自己的登录态。
 - **不上报任何数据**。状态（MR、文档、发布、折叠展开）只保存在当前会话里。
 
@@ -277,7 +282,7 @@ Desktop 的 Code 标签页没有 `/config`，用 `/hud set` 修改；终端里�
 | 看不到 HUD | 当前会话启动于安装之前，新开一个会话；再用 `/hud` 确认模块已开启 |
 | 每行出现两遍 | 旧的 `usage-hud` / `codeup-mr` 没卸载，见[快速开始](#快速开始)第 2 步 |
 | 显示「未找到云效 token」 | 按[依赖](#依赖)配置 token |
-| 没有 MR 行 | 仓库 origin 不在 Codeup 上；当前分支没有 MR；或该 MR 不在仓库最新的 100 条之内 |
+| 没有 MR 行 | 仓库 origin 不在 Codeup 上；当前分支没有 MR；或该 MR 不在仓库最新的 100 条之内。在别处创建的 MR，可以在消息里贴它的链接 |
 | 文档只显示「文档 xxxxxxxx…」 | 未安装或未登录 `lark-cli`（终端执行 `lark-cli auth login`），或无该文档权限；临时失败会自动重试，也可执行 `/docs` 立即重试 |
 | 发布行一直是「等待运行开始」 | 该阶段还没有新的执行（触发被排队或失败），点「检查」重查；或触发时间与执行开始时间相差超过 2 分钟 |
 | 发布行显示「查询失败」 | 令牌没有 AppStack 读权限，或组织 ID 不对，见[依赖](#依赖) |
@@ -327,6 +332,7 @@ claude plugin test .
 
 ## 更新记录
 
+- **0.5.0**：发布识别支持一条命令多次 `deploy.sh`、输出只剩 `Flow run:` 行（直接查 Flow 运行状态），并排除 `--dry-run`；MR 模块显示本会话创建的 MR（按作者与创建时间查找，不依赖目录和分支）和消息、回答、命令输出里出现的 MR 链接
 - **0.4.3**：README 重写（目录、快速开始、虚构示例数据），测试数据脱敏
 - **0.4.2**：超出最多行数时改为原地「⌄ 展开另 N … / ⌃ 收起」按钮（MR、文档、发布通用）；文档标题查询遇到超时等临时失败会重试
 - **0.4.1**：发布模块支持跟踪已有发布：在消息里贴 AppStack 阶段链接或执行 `/deploys <链接>`

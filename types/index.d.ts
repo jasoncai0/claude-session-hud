@@ -65,8 +65,11 @@ export type DeployRun = {
   branch?: string
   /** What the release ships (deploy.sh --feature). */
   feature?: string
-  /** The AppStack stage page. */
+  /** The run's page: the AppStack stage page, or the Flow run page when only that is known. */
   url: string
+  /** The Flow pipeline run behind the release, when the trigger printed it: read directly, no execution matching. */
+  flowPipelineId?: string
+  flowRunId?: string
   /** Epoch ms of the trigger, or of when tracking started. */
   triggeredAt: number
   /** Tracked from a pasted stage link rather than triggered here: its latest execution is the run, however old. */
@@ -91,6 +94,8 @@ declare module 'claude-code' {
       mrExpanded: string | null
       /** `${repo}!${id}` of MRs hidden from the band. */
       mrDismissed: string[]
+      /** MRs the session opened (found by author and time) or linked, shown whatever branch is checked out. */
+      mrPinned: { repoPath: string; localId: number }[]
       /** Newest first. */
       docs: DocLink[]
       /** Tokens hidden from the band. */

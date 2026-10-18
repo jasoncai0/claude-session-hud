@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { DeployRun } from '../../types'
-import { addRun, envOfStage, findStageTargets, isSettled, pickExecution, progressOf, runOf, stateOf, triggerOf } from './parse'
+import { addRun, envOfStage, findStageTargets, isSettled, pickExecution, progressOf, runOf, stateOf, triggersOf } from './parse'
 
 const WF = '0123456789abcdef0123456789abcdef'
 const ST = 'fedcba9876543210fedcba9876543210'
@@ -22,30 +22,57 @@ const DEPLOY_OUT = [
   'Flow run:      https://flow.aliyun.com/pipelines/1234567/builds/194',
   'Labelled: 用户资料：公开字段可读',
 ].join('\n')
+/** The single trigger of a call, or null: the shape the earlier tests were written against. */
+const triggerOne = (...a: Parameters<typeof triggersOf>) => triggersOf(...a)[0] ?? null
 const CMD = 'bash ~/.claude/skills/yunxiao-deploy/scripts/deploy.sh demo-api prod release/online --feature "x" --yes'
 
 test('triggerOf reads a deploy.sh run: stage, env, stage name, branch, feature', () => {
-  expect(triggerOf('Bash', { command: CMD }, DEPLOY_OUT, false)).toEqual({
+  expect(triggerOne('Bash', { command: CMD }, DEPLOY_OUT, false)).toEqual({
     key: `demo-api/${ST}`, app: 'demo-api', workflowSn: WF, stageSn: ST, url: URL,
     env: 'prod', stageName: '生产', branch: 'release/online', feature: '用户资料：公开字段可读',
+    flowPipelineId: '1234567', flowRunId: '194',
   })
 })
 
+test('triggersOf: two deploy.sh calls whose output was cut to the Flow run lines give two runs, by order', () => {
+  const cmd = [
+    'cd ~/scripts',
+    'bash deploy.sh demo-api prod release/online --yes --feature "$F" 2>&1 | grep -E "Commit|Flow run|ERROR"',
+    'bash deploy.sh demo-api-cn prod release/prod --yes --feature "$F" 2>&1 | grep -E "Commit|Flow run|ERROR"',
+  ].join('\n')
+  const out = [
+    '=== demo-api prod release/online ===', ' Commit  : <unreadable>', 'Flow run:      https://flow.aliyun.com/pipelines/1234567/builds/196',
+    '=== demo-api-cn prod release/prod ===', ' Commit  : <unreadable>', 'Flow run:      https://flow.aliyun.com/pipelines/7654321/builds/18',
+  ].join('\n')
+  expect(triggersOf('Bash', { command: cmd }, out, false)).toEqual([
+    { key: 'flow/1234567', app: 'demo-api', workflowSn: '', stageSn: '', url: 'https://flow.aliyun.com/pipelines/1234567/builds/196', env: 'prod', branch: 'release/online', flowPipelineId: '1234567', flowRunId: '196' },
+    { key: 'flow/7654321', app: 'demo-api-cn', workflowSn: '', stageSn: '', url: 'https://flow.aliyun.com/pipelines/7654321/builds/18', env: 'prod', branch: 'release/prod', flowPipelineId: '7654321', flowRunId: '18' },
+  ])
+})
+
+test('triggersOf: a loop over one deploy.sh call counts its links; variable words are not taken as names', () => {
+  const cmd = 'for x in a b; do bash deploy.sh "$app" prod release/online --yes 2>&1 | grep "Flow run"; done'
+  const out = 'Flow run: https://flow.aliyun.com/pipelines/111/builds/5\nFlow run: https://flow.aliyun.com/pipelines/222/builds/6'
+  const runs = triggersOf('Bash', { command: cmd }, out, false)
+  expect(runs.map(r => `${r.app}|${r.env ?? ''}|${r.flowRunId}`)).toEqual(['流水线 111|prod|5', '流水线 222|prod|6'])
+})
+
 test('triggerOf ignores dry runs, failures, other tools and unrelated commands', () => {
-  expect(triggerOf('Bash', { command: `${CMD} --dry-run` }, DEPLOY_OUT.replace(/Triggered.*\n/, ''), false)).toBe(null)
-  expect(triggerOf('Bash', { command: CMD }, DEPLOY_OUT, true)).toBe(null)
-  expect(triggerOf('Read', { command: CMD }, DEPLOY_OUT, false)).toBe(null)
-  expect(triggerOf('Bash', { command: 'cat deploy-log.tsv' }, URL, false)).toBe(null)
+  // deploy.sh --dry-run still prints `Triggered.` and the latest existing run: the flag in the command decides.
+  expect(triggerOne('Bash', { command: `${CMD} --dry-run` }, DEPLOY_OUT, false)).toBe(null)
+  expect(triggerOne('Bash', { command: CMD }, DEPLOY_OUT, true)).toBe(null)
+  expect(triggerOne('Read', { command: CMD }, DEPLOY_OUT, false)).toBe(null)
+  expect(triggerOne('Bash', { command: 'cat deploy-log.tsv' }, URL, false)).toBe(null)
 })
 
 test('triggerOf reads a direct release-stage execute call from its flags', () => {
   const cmd = `aliyun devops app-stack-execute-change-request-release-stage --app-name demo-api --release-workflow-sn ${WF} --release-stage-sn ${ST} --params '{"demo-api":"dev"}'`
-  expect(triggerOf('Bash', { command: cmd }, '{"ok":true}', false)).toEqual({ key: `demo-api/${ST}`, app: 'demo-api', workflowSn: WF, stageSn: ST, url: URL })
-  expect(triggerOf('Bash', { command: `${cmd} --cli-dry-run` }, '', false)).toBe(null)
+  expect(triggerOne('Bash', { command: cmd }, '{"ok":true}', false)).toEqual({ key: `demo-api/${ST}`, app: 'demo-api', workflowSn: WF, stageSn: ST, url: URL })
+  expect(triggerOne('Bash', { command: `${cmd} --cli-dry-run` }, '', false)).toBe(null)
 })
 
 test('addRun puts the newest first and starts a re-triggered stage over', () => {
-  const t = triggerOf('Bash', { command: CMD }, DEPLOY_OUT, false)
+  const t = triggerOne('Bash', { command: CMD }, DEPLOY_OUT, false)
   if (!t) throw new Error('no trigger')
   const old: DeployRun = { ...t, triggeredAt: 1, number: '193', status: 'SUCCESS' }
   const other: DeployRun = { ...t, key: 'x/y', app: 'x', triggeredAt: 2 }

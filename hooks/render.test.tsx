@@ -83,13 +83,21 @@ function world(on: On, { branch = 'feat', calls = [], extra = [], toolText = '',
       const body = e.url.includes(':getPipelineRun') ? releaseRun(release.status) : { data: [{ number: '194', startTime: '2026-10-15T10:00:03Z', state: release.status }] }
       return { value: { status: 200, ok: true, headers: {}, text: JSON.stringify(body) } }
     }
+    if (e.url.includes('/flow/organizations/')) {
+      return { value: { status: 200, ok: true, headers: {}, text: JSON.stringify(releaseRun(release.status).pipelineRun) } }
+    }
+    if (e.url.endsWith('/platform/user')) return { value: { status: 200, ok: true, headers: {}, text: '{"id":"u1"}' } }
+    if (e.url.includes('authorIds=u1')) {
+      const opened = { ...mrOf('billing-svc', 77, 'fix/space-online'), detailUrl: `https://codeup.aliyun.com/${ORG}/backend/billing-svc/change/77`, createdAt: '2026-10-15T18:00:30+08:00' }
+      return { value: { status: 200, ok: true, headers: {}, text: JSON.stringify([opened]) } }
+    }
     if (e.url.includes('/branches/')) {
       return { value: isBranchGone ? { status: 404, ok: false, headers: {}, text: '{"code":404}' } : { status: 200, ok: true, headers: {}, text: '{"name":"feat"}' } }
     }
     const id = Object.entries(REPO_IDS).find(([, v]) => e.url.includes(`projectIds=${v}`) || e.url.includes(`/repositories/${v}/`))
     const body = e.url.includes('/compares') ? COMPARE
       : /\/changeRequests\/\d+$/.test(e.url) ? detail
-      : e.url.includes('/changeRequests?') ? [{ ...mrOf(id?.[0] ?? '?', id?.[0] === 'demo-api' ? 191 : 53, branch), state }, ...(id?.[0] === 'demo-api' ? extra : [])]
+      : e.url.includes('/changeRequests?') ? [{ ...mrOf(id?.[0] ?? '?', id?.[0] === 'demo-api' ? 191 : 53, branch), state }, ...(id?.[0] === 'demo-api' ? extra : [mrOf('billing-svc', 77, 'fix/space-online')])]
       : { id: REPO_IDS[decodeURIComponent(e.url).split('/').at(-1) ?? ''] }
     return { value: { status: 200, ok: true, headers: {}, text: JSON.stringify(body) } }
   })
@@ -253,6 +261,38 @@ test('/deploys <link> tracks the stage and lists it', async ($, on) => {
   const out = await $.command.run({ command: 'deploys', args: STAGE_URL } as never) as { text?: string }
   expect(out.text).toContain('**demo-api**（跟踪）')
   expect(out.text).toContain('运行中 #194')
+})
+
+test('two deploys in one command, output cut to its Flow run lines, both show and read the Flow runs', async ($, on) => {
+  const calls: string[] = []
+  const toolText = ['=== demo-api ===', 'Flow run:      https://flow.aliyun.com/pipelines/1234567/builds/196', '=== demo-api-cn ===', 'Flow run:      https://flow.aliyun.com/pipelines/7654321/builds/18'].join('\n')
+  const clock = world(on, { calls, toolText, release: { status: 'RUNNING' } })
+  await bash($, 'bash deploy.sh demo-api prod release/online --yes 2>&1 | grep "Flow run"\nbash deploy.sh demo-api-cn prod release/prod --yes 2>&1 | grep "Flow run"')
+  await clock.advance(5_000)
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...BAND })
+  expect((await ui.find({ type: 'Link', text: 'demo-api' }))?.props.href).toBe('https://flow.aliyun.com/pipelines/1234567/builds/196')
+  expect((await ui.find({ type: 'Link', text: 'demo-api-cn' }))?.props.href).toBe('https://flow.aliyun.com/pipelines/7654321/builds/18')
+  expect(calls.some(u => u.includes(`/flow/organizations/${ORG}/pipelines/7654321/runs/18`))).toBe(true)
+  expect(calls.some(u => u.includes('/executions'))).toBe(false)
+  await ui.unmount()
+})
+
+test('an MR opened by a CLI call that prints only its id still shows, found by author and time', async ($, on) => {
+  const calls: string[] = []
+  world(on, { calls, branch: 'lonely', toolText: '  海外 -> release/online  localId= 77' })
+  await bash($, 'yx codeup-create-change-request --repository-id 1002 --source-branch "$src" --target-branch "$tgt" --title t')
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...BAND })
+  expect((await ui.find({ type: 'Link', text: '!77' }))?.props.href).toBe(`https://codeup.aliyun.com/${ORG}/backend/billing-svc/change/77`)
+  expect(calls.some(u => u.includes('authorIds=u1') && u.includes('orderBy=created_at'))).toBe(true)
+  await ui.unmount()
+})
+
+test('a Codeup MR link in a prompt pins that MR', async ($, on) => {
+  world(on, { branch: 'lonely' })
+  await $.prompt.submit({ text: `看下 https://codeup.aliyun.com/${ORG}/backend/demo-api/change/191` } as never)
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...BAND })
+  expect(await ui.find({ type: 'Link', text: '!191' })).toBeDefined()
+  await ui.unmount()
 })
 
 test('deploy off: a deploy.sh run is not tracked', { options: { deploy: false, mr: false } }, async ($, on) => {
