@@ -360,6 +360,24 @@ test('docsArtifacts off: artifact links are left out', { options: { docsArtifact
   await ui.unmount()
 })
 
+test('while a card holds the band, the HUD stays as one summary line above it with nothing to press', async ($, on) => {
+  world(on)
+  await $.session.start(START)
+  await $.turn.complete(turn())
+  const card = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...BAND, props: { ...BAND.props, hasSurvey: true } })
+  expect(await card.find({ type: 'Text', text: '42%' })).toBeDefined()
+  expect(await card.find({ type: 'Text', text: '⑂!191' })).toBeDefined()
+  expect(await card.find({ type: 'Text', text: 'engine' })).toBeDefined()
+  expect(await card.find({ type: 'Button', key: 'hud-fold' })).toBeUndefined()
+  expect(await card.find({ type: 'Text', text: '待合并' })).toBeUndefined()
+  await card.unmount()
+
+  const after = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...BAND })
+  expect(await after.find({ type: 'Text', text: '待合并' })).toBeDefined()
+  expect(await after.find({ type: 'Button', key: 'hud-fold' })).toBeDefined()
+  await after.unmount()
+})
+
 test('deploy off: a deploy.sh run is not tracked', { options: { deploy: false, mr: false } }, async ($, on) => {
   const calls: string[] = []
   const clock = world(on, { calls, toolText: DEPLOY_OUT })

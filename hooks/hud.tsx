@@ -43,14 +43,17 @@ export function parseHud(args: string): HudCommand {
   return 'error' in parsed ? { kind: 'reply', text: parsed.error } : { kind: 'set', key, value: parsed.value }
 }
 
-/** The band: every enabled module's rows under one fold toggle, or folded, one summary row. */
-export function band(ui: Ui, sections: readonly Section[], isCollapsed: boolean, onToggle: () => void): RenderElement {
+/**
+ * The band: every enabled module's rows under one fold toggle, or folded, one summary row. Without `onToggle` it is the
+ * summary alone with no control in it: what shows above a card holding the band, which owns the keys and clicks there.
+ */
+export function band(ui: Ui, sections: readonly Section[], isCollapsed: boolean, onToggle?: () => void): RenderElement {
   const { Box, Button, Text } = ui
-  const toggle = (
+  const toggle = onToggle ? (
     <Box key="hud-toggle" width={TOGGLE_W} flexShrink={0}>
       <Button key="hud-fold" plain dimColor label={isCollapsed ? '▸' : '▾'} onPress={onToggle} />
     </Box>
-  )
+  ) : gap(ui, 'hud-toggle', TOGGLE_W)
   if (isCollapsed) {
     const parts = sections.flatMap((s, i) => (i === 0 ? s.summary : [<Text key={`hud-sep-${i}`} dimColor>·</Text>, ...s.summary]))
     return (

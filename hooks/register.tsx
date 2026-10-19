@@ -612,7 +612,9 @@ export const register: Register = (on, options) => {
   // The band above the prompt is one site shared by every plugin: draw on top of whatever the plugins beneath drew
   // (next), never instead of it, and step aside entirely while a survey holds it.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    if (e.props.hasSurvey || !isAnyOn) return next(e)
+    if (!isAnyOn) return next(e)
+    // A card (a survey, a question) holds the band: stay as one line above it, with nothing in it to press.
+    const isCardUp = e.props.hasSurvey
     const ui = $.ui.resolve(e)
     const unfolded = listOf<string>(await read($, expandedLists))
     const foldOf = (list: string): Fold => ({
@@ -655,7 +657,9 @@ export const register: Register = (on, options) => {
 
     const isCollapsed = (await read($, collapsed)) ?? settings.collapsed
     const below = await next(e)
-    const mine = band(ui, sections, isCollapsed, () => void update($, collapsed, cur => !(cur ?? settings.collapsed)))
+    const mine = isCardUp
+      ? band(ui, sections, true)
+      : band(ui, sections, isCollapsed, () => void update($, collapsed, cur => !(cur ?? settings.collapsed)))
     if (isBlank(below)) return mine
     return (
       <ui.Box flexDirection="column">
