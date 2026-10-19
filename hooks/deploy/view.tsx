@@ -2,7 +2,7 @@ import type { RenderElement } from 'claude-code'
 
 import type { DeployRun } from '../../types'
 import type { Settings } from '../settings'
-import { ICON_W, ID_W, STATE_W, capRows, cell } from '../ui'
+import { ICON_W, ID_W, STATE_W, capRows, cell, foldButton } from '../ui'
 import type { Fold, Section, Ui } from '../ui'
 import { progressOf, stateOf } from './parse'
 
@@ -19,10 +19,19 @@ export type DeployActions = {
 
 export type DeployState = { runs: readonly DeployRun[]; dismissed: readonly string[]; expanded: string | null }
 
-/** A run's stages unfolded: one line per job, `✓ 部署 · 预热发布`, the release note first. */
-function jobList(ui: Ui, r: DeployRun): RenderElement {
+/** A stage's name column in the unfolded list (构建, 部署). */
+const STAGE_NAME_W = 6
+
+/**
+ * A run unfolded: one line per stage, its glyph and name, then its jobs inline (`✓ 预热发布 · ✕ 灰度人工卡点`), cut to
+ * the row's width and whole on hover; the release note first, a `⌃ 收起` last. Kept short so the band rarely scrolls.
+ */
+function jobList(ui: Ui, r: DeployRun, settings: Settings, act: DeployActions): RenderElement {
   const { Box, Text } = ui
-  const jobs = (r.stages ?? []).flatMap(s => s.jobs.map(j => ({ stage: s.name, ...j })))
+  const stages = r.stages ?? []
+  // From the state column to the end of the progress column: the same span the row's name columns take.
+  const span = STATE_W + (settings.mrRepo ? settings.mrRepoWidth + 1 : 0) + settings.mrSourceWidth + 1 + settings.mrTargetWidth + ARROW_AND_GAP + 1
+  const jobsW = Math.max(10, span - STAGE_NAME_W - 4)
   return (
     <Box key={`deploy-jobs-${r.key}`} flexDirection="column" paddingLeft={ICON_W + ID_W + 2}>
       {r.feature ? (
@@ -30,16 +39,18 @@ function jobList(ui: Ui, r: DeployRun): RenderElement {
           <Text dimColor wrap="truncate-end">发布说明：{r.feature}</Text>
         </Box>
       ) : null}
-      {jobs.length ? jobs.map((j, i) => {
-        const s = stateOf(j.status)
+      {stages.length ? stages.map((st, i) => {
+        const s = stateOf(st.status)
+        const jobs = st.jobs.map(j => `${stateOf(j.status).glyph} ${j.name}`).join(' · ')
         return (
-          <Box key={`deploy-job-${r.key}-${i}`} height={1} columnGap={1}>
+          <Box key={`deploy-stage-${r.key}-${i}`} height={1} columnGap={1} flexWrap="nowrap" overflow="hidden">
             <Text color={s.tone}>{s.glyph}</Text>
-            <Text wrap="truncate-end">{j.stage} · {j.name}</Text>
-            <Text dimColor>{s.label}</Text>
+            {cell(ui, { key: `deploy-stage-name-${r.key}-${i}`, text: st.name, width: STAGE_NAME_W, dimColor: true })}
+            {cell(ui, { key: `deploy-stage-jobs-${r.key}-${i}`, text: jobs || s.label, width: jobsW })}
           </Box>
         )
       }) : <Text key={`deploy-nojobs-${r.key}`} dimColor>{progressOf(r)}</Text>}
+      {foldButton(ui, `deploy-fold-${r.key}`, () => act.toggle(r.key))}
     </Box>
   )
 }
@@ -66,7 +77,7 @@ function row(ui: Ui, r: DeployRun, settings: Settings, isOpen: boolean, act: Dep
         </Box>
         <Button key={`deploy-dismiss-${r.key}`} role="dismiss" plain label="×" dimColor onPress={() => act.dismiss(r.key)} />
       </Box>
-      {isOpen ? jobList(ui, r) : null}
+      {isOpen ? jobList(ui, r, settings, act) : null}
     </Box>
   )
 }

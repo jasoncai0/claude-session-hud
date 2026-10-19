@@ -2,7 +2,7 @@ import type { RenderElement } from 'claude-code'
 
 import type { MrView, SessionView } from '../../types'
 import type { Settings } from '../settings'
-import { DISMISS_W, ICON_W, ID_W, STATE_W, TOGGLE_W, capRows, cell, gap } from '../ui'
+import { DISMISS_W, ICON_W, ID_W, STATE_W, TOGGLE_W, capRows, cell, foldButton, gap } from '../ui'
 import type { Fold, Section, Ui } from '../ui'
 import { CHECK_GLYPH, prIcon, stateOf, summarize, thousands } from './codeup'
 import { mrKey, mrRef } from './session'
@@ -79,7 +79,7 @@ function checksCell(ui: Ui, mr: MrView, isOpen: boolean, act: MrActions): Render
   )
 }
 
-function checksList(ui: Ui, mr: MrView): RenderElement {
+function checksList(ui: Ui, mr: MrView, act: MrActions): RenderElement {
   const { Box, Text } = ui
   const key = mrKey(mr)
   return (
@@ -93,6 +93,7 @@ function checksList(ui: Ui, mr: MrView): RenderElement {
           </Box>
         )
       })}
+      {foldButton(ui, `checks-fold-${key}`, () => act.toggleChecks(key))}
     </Box>
   )
 }
@@ -117,7 +118,7 @@ function row(ui: Ui, mr: MrView, settings: Settings, isOpen: boolean, act: MrAct
         {settings.mrChecks ? checksCell(ui, mr, isOpen, act) : null}
         <Button key={`dismiss-${key}`} role="dismiss" plain label="×" dimColor onPress={() => act.dismiss(key)} />
       </Box>
-      {isOpen && settings.mrChecks ? checksList(ui, mr) : null}
+      {isOpen && settings.mrChecks ? checksList(ui, mr, act) : null}
     </Box>
   )
 }

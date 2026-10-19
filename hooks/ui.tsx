@@ -64,6 +64,16 @@ export function cell(ui: Ui, spec: CellSpec): RenderElement {
 /** A blank column the width of `width`, so rows without a control stay aligned with rows that have one. */
 export const gap = (ui: Ui, key: string, width: number): RenderElement => <ui.Box key={key} width={width} flexShrink={0} />
 
+/**
+ * The `⌃ 收起` line closing an unfolded detail list: the fold is in reach where the list ends, even when a tall band
+ * has scrolled the row's own button out of view.
+ */
+export const foldButton = (ui: Ui, key: string, onPress: () => void): RenderElement => (
+  <ui.Box key={`${key}-box`} height={1}>
+    <ui.Button key={key} plain dimColor label="⌃ 收起" onPress={onPress} />
+  </ui.Box>
+)
+
 /** Whether a list shows past its row cap, and the press that flips it. */
 export type Fold = { isExpanded: boolean; toggle: () => void }
 

@@ -139,6 +139,9 @@ for (const surface of ['terminal', 'desktop'] as const) {
 
     await ui.press({ key: 'checks-backend/demo-api!191' })
     expect(await ui.find({ type: 'Text', text: '评审 1/2' })).toBeDefined()
+    await ui.press({ key: 'checks-fold-backend/demo-api!191' })
+    expect(await ui.find({ type: 'Text', text: '评审 1/2' })).toBeUndefined()
+    await ui.press({ key: 'checks-backend/demo-api!191' })
 
     await ui.press({ key: 'dismiss-backend/demo-api!191' })
     expect(await ui.find({ type: 'Text', text: '待合并' })).toBeUndefined()
@@ -254,7 +257,7 @@ test('a release triggered by deploy.sh shows its AppStack link and polls its run
 
   // 检查 unfolds every job and fetches afresh, even a settled run.
   await ui.press({ key: `deploy-check-demo-api/${ST}` })
-  expect(await ui.find({ type: 'Text', text: '构建 · 镜像构建' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '✓ 镜像构建' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: '发布说明：公开字段可读' })).toBeDefined()
   expect(calls.filter(u => u.includes('/appstack/')).length > settled).toBe(true)
   await ui.unmount()
@@ -376,6 +379,25 @@ test('while a card holds the band, the HUD stays as one summary line above it wi
   expect(await after.find({ type: 'Text', text: '待合并' })).toBeDefined()
   expect(await after.find({ type: 'Button', key: 'hud-fold' })).toBeDefined()
   await after.unmount()
+})
+
+test('a release row\'s 检查 folds again on a second press, as an MR row does', async ($, on) => {
+  const clock = world(on, { toolText: DEPLOY_OUT, release: { status: 'FAIL' } })
+  await $.session.start(START)
+  await bash($, DEPLOY_CMD)
+  await clock.advance(5_000)
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...BAND })
+  const key = `deploy-check-demo-api/${ST}`
+  await ui.press({ key })
+  expect(await ui.find({ type: 'Text', text: '✓ 镜像构建' })).toBeDefined()
+  await ui.press({ key })
+  expect(await ui.find({ type: 'Text', text: '✓ 镜像构建' })).toBeUndefined()
+  await ui.press({ key })
+  expect(await ui.find({ type: 'Text', text: '✓ 镜像构建' })).toBeDefined()
+  // The 收起 at the end of the unfolded list folds it too: in reach when a tall band has scrolled the row away.
+  await ui.press({ key: `deploy-fold-demo-api/${ST}` })
+  expect(await ui.find({ type: 'Text', text: '✓ 镜像构建' })).toBeUndefined()
+  await ui.unmount()
 })
 
 test('deploy off: a deploy.sh run is not tracked', { options: { deploy: false, mr: false } }, async ($, on) => {
