@@ -1,10 +1,10 @@
 import type { Check, CheckStatus, MrView } from '../../types'
+import { LIST_MAX } from '../settings'
 import type { MrPin } from './codeup'
 
 /** A GitHub repository: owner and name. */
 export type GhRepo = { owner: string; name: string }
 
-const OPEN_SHOWN = 3
 const CI_NAMES_SHOWN = 2
 const PR_URL_RE = /https?:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/pull\/(\d+)/g
 const CI_FAILED = new Set(['FAILURE', 'ERROR', 'TIMED_OUT', 'CANCELLED', 'ACTION_REQUIRED', 'STARTUP_FAILURE'])
@@ -43,7 +43,7 @@ const FIELDS = `fragment F on PullRequest {
  */
 export function prQuery(repo: GhRepo, branch: string | undefined, numbers: readonly number[]): string {
   const byBranch = branch
-    ? `branch: pullRequests(headRefName: ${JSON.stringify(branch)}, first: 5, states: [OPEN, MERGED, CLOSED], orderBy: { field: CREATED_AT, direction: DESC }) { nodes { ...F } }`
+    ? `branch: pullRequests(headRefName: ${JSON.stringify(branch)}, first: ${LIST_MAX}, states: [OPEN, MERGED, CLOSED], orderBy: { field: CREATED_AT, direction: DESC }) { nodes { ...F } }`
     : ''
   const pinned = numbers.map(n => `n${n}: pullRequest(number: ${Math.trunc(n)}) { ...F }`).join('\n')
   return `query { repository(owner: ${JSON.stringify(repo.owner)}, name: ${JSON.stringify(repo.name)}) {\n${byBranch}\n${pinned}\n} }\n${FIELDS}`
@@ -82,7 +82,7 @@ export function prsOf(answer: unknown): { branch: ApiPr[]; pinned: ApiPr[] } {
 /** Open PRs of the branch (newest first, capped); none open → the latest merged / closed one. */
 export function pickPrs(prs: readonly ApiPr[]): ApiPr[] {
   const open = prs.filter(p => p.state === 'OPEN')
-  return open.length ? open.slice(0, OPEN_SHOWN) : prs.slice(0, 1)
+  return open.length ? open.slice(0, LIST_MAX) : prs.slice(0, 1)
 }
 
 /** The PR's state in the MR vocabulary the rows draw: 草稿, 评审中, 待合并, 已合并, 已关闭. */

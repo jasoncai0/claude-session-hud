@@ -1,6 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { DocLink } from '../../types'
+import { LIST_MAX } from '../settings'
 import { artifactsOfCall, findAllDocs, findArtifacts, findDocs, htmlTitle, isCreation, isLarkTool, mergeDocs } from './links'
 import { inspectArgv, isMissingProgram, lookupOf, titleOf } from './lookup'
 
@@ -50,9 +51,9 @@ test('mergeDocs puts the newest first, keeps titles, and created outranks mentio
 
 test('mergeDocs drops only mentions past the cap, never a created doc', () => {
   const created: DocLink = { token: 'C', url: 'u/C', kind: 'docx', origin: 'created', at: 0 }
-  const mentions = Array.from({ length: 40 }, (_, i) => ({ token: `M${i}`, url: `u/M${i}`, kind: 'docx' }))
+  const mentions = Array.from({ length: LIST_MAX + 10 }, (_, i) => ({ token: `M${i}`, url: `u/M${i}`, kind: 'docx' }))
   const merged = mergeDocs([created], mentions, 'mentioned', 1)
-  expect(merged.filter(d => d.origin === 'mentioned')).toHaveLength(30)
+  expect(merged.filter(d => d.origin === 'mentioned')).toHaveLength(LIST_MAX)
   expect(merged.some(d => d.token === 'C')).toBe(true)
 })
 

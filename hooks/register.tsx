@@ -18,7 +18,7 @@ import { compareRange, findPrLinks, parseGithubRemote, pickPrs, prQuery, prView,
 import type { ApiPr, GhRepo } from './mr/github'
 import { dirsOf, mrList, rememberDirs } from './mr/session'
 import { mrLayout, mrSection } from './mr/view'
-import { MODULE_IDS, PLUGIN, settingsOf } from './settings'
+import { LIST_MAX, MODULE_IDS, PLUGIN, settingsOf } from './settings'
 import type { Settings } from './settings'
 import { isBlank } from './tree'
 import type { Fold, Section } from './ui'
@@ -44,7 +44,6 @@ const AUTHOR_PAGE = 10
 /** How much earlier than the create call an MR may be stamped and still be its (clock skew). */
 const CREATE_SLACK_MS = 60_000
 const HTTP_NOT_FOUND = 404
-const MAX_REPOS = 5
 const GIT_TIMEOUT_MS = 5_000
 const LARK_TIMEOUT_MS = 8_000
 /** Exit status of a command that was not found. */
@@ -261,7 +260,7 @@ async function sessionRoots($: EngineInterface): Promise<string[]> {
     if (!roots.has(dir)) roots.set(dir, await git($, dir, 'rev-parse', '--show-toplevel'))
     const root = roots.get(dir)
     if (root && !found.includes(root)) found.push(root)
-    if (found.length >= MAX_REPOS) break
+    if (found.length >= LIST_MAX) break
   }
   return found
 }

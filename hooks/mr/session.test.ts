@@ -1,6 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { MrView, RepoView } from '../../types'
+import { LIST_MAX } from '../settings'
 import { dirsOf, mrList, rememberDirs } from './session'
 
 const mr = (repo: string, id: number, state: string, fail = false): MrView => ({
@@ -18,9 +19,9 @@ test('dirsOf reads edited files and Bash cd / git -C targets', () => {
   expect(dirsOf('Bash', { command: 'cd relative && ls' }, '/Users/me')).toEqual([])
 })
 
-test('rememberDirs dedupes, keeps newest last, caps at 20', () => {
+test('rememberDirs dedupes, keeps newest last, caps at LIST_MAX (100)', () => {
   expect(rememberDirs(['/a', '/b'], ['/a'])).toEqual(['/b', '/a'])
-  expect(rememberDirs(Array.from({ length: 20 }, (_, i) => `/${i}`), ['/new'])).toHaveLength(20)
+  expect(rememberDirs(Array.from({ length: LIST_MAX }, (_, i) => `/${i}`), ['/new'])).toHaveLength(LIST_MAX)
 })
 
 test('mrList renders linked markdown lines', () => {

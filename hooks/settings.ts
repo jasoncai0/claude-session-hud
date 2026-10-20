@@ -2,6 +2,9 @@ import type { PluginOptions } from 'claude-code'
 
 export const PLUGIN = 'session-hud'
 
+/** How many items a module keeps per session (repos, MRs, docs, releases): rows past `*MaxRows` fold, so this is only a safety cap. */
+export const LIST_MAX = 100
+
 export const MODULE_IDS = ['usage', 'mr', 'docs', 'deploy'] as const
 export type ModuleId = (typeof MODULE_IDS)[number]
 

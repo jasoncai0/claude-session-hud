@@ -1,5 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
+import { LIST_MAX } from '../settings'
 import { addPins, branchChecks, checksOf, createdSince, findMrLinks, isMrCreation, diffStat, repoLabel, thousands, parseRemote, pickMrs, stateOf, summarize, toView, tokenFromProfile } from './codeup'
 import type { ApiChangeRequest } from './codeup'
 
@@ -128,4 +129,7 @@ test('createdSince keeps the MRs created at or after the call; addPins dedupes',
   const pins = createdSince(list, at)
   expect(pins).toEqual([{ repoPath: `${ORG}/backend/demo-api`, localId: 206 }])
   expect(addPins(pins, [...pins, { repoPath: 'x/y', localId: 1 }])).toHaveLength(2)
+  const many = Array.from({ length: LIST_MAX + 5 }, (_, i) => ({ repoPath: 'x/y', localId: i }))
+  expect(addPins([], many).map(p => p.localId).slice(0, 1)).toEqual([5])
+  expect(addPins([], many)).toHaveLength(LIST_MAX)
 })

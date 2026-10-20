@@ -1,4 +1,5 @@
 import type { DeployRun, DeployStage } from '../../types'
+import { LIST_MAX } from '../settings'
 
 const STAGE_URL_RE = /https:\/\/devops\.aliyun\.com\/appstack\/app\/([\w.-]+)\/workflow\/([0-9a-f]{32})\/stage\/([0-9a-f]{32})/
 const STAGE_URLS_RE = new RegExp(STAGE_URL_RE.source, 'g')
@@ -7,8 +8,6 @@ const DEPLOY_SH_RE = /\bdeploy\.sh\s+(\S+)\s+(\S+)(?:\s+([^\s-]\S*))?/g
 const FLOW_RUN_RE = /https:\/\/flow\.aliyun\.com\/pipelines\/(\d+)\/builds\/(\d+)/g
 const DRY_RUN_RE = /\s--(?:dry-run|cli-dry-run)\b/
 const EXECUTE_RE = /\bapp-stack-execute-change-request-release-stage\b/
-/** Runs kept per session; the oldest drop off. */
-const MAX_RUNS = 30
 /** An AppStack-made Flow pipeline's name: `<app>-<workflow>-<stage>`, e.g. `demo-api-标准发布流程-生产阶段`. */
 const PIPELINE_NAME_RE = /^(.+)-([^-]+)-([^-]+阶段[^-]*)$/
 /** How much earlier than the trigger an execution may start and still be its run (clock skew). */
@@ -119,7 +118,7 @@ export function addRun(known: readonly DeployRun[], t: DeployTarget, now: number
   const prior = known.find(r => isSame(r) && !isUnnamed(r))
   const named = isUnnamed(t) && prior ? { ...t, app: prior.app, ...(prior.stageName && !t.stageName ? { stageName: prior.stageName } : {}) } : t
   const run: DeployRun = isTracked ? { ...named, triggeredAt: now, isTracked } : { ...named, triggeredAt: now }
-  return [run, ...known.filter(r => !isSame(r))].slice(0, MAX_RUNS)
+  return [run, ...known.filter(r => !isSame(r))].slice(0, LIST_MAX)
 }
 
 const ENV_KEYWORDS: readonly (readonly [string, RegExp])[] = [['prod', /生产|线上|正式|prod/i], ['pre', /预发|灰度|staging|pre/i], ['test', /测试|日常|daily|test/i]]

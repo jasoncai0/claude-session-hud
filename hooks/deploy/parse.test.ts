@@ -1,6 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { DeployRun } from '../../types'
+import { LIST_MAX } from '../settings'
 import { addRun, envOfStage, findStageTargets, isSettled, isUnnamed, pickExecution, pipelineLabel, progressOf, runOf, stateOf, triggersOf } from './parse'
 
 const WF = '0123456789abcdef0123456789abcdef'
@@ -143,7 +144,7 @@ test('isSettled: only a pinned run in a final state stops being polled; stateOf 
   expect(stateOf('ODD').label).toBe('ODD')
 })
 
-test('addRun: the same Flow pipeline replaces its row however it was recorded, keeping its name; 30 runs are kept', () => {
+test('addRun: the same Flow pipeline replaces its row however it was recorded, keeping its name; LIST_MAX runs are kept', () => {
   const t = triggerOne('Bash', { command: CMD }, DEPLOY_OUT, false)
   if (!t) throw new Error('no trigger')
   const loop = 'for x in a; do bash deploy.sh "$app" prod --yes | grep "Flow run"; done'
@@ -153,8 +154,8 @@ test('addRun: the same Flow pipeline replaces its row however it was recorded, k
   const runs = addRun(addRun([], t, 1), again, 2)
   expect(runs.map(r => `${r.key}|${r.app}|${r.flowRunId}`)).toEqual(['flow/1234567|demo-api|195'])
   expect(isUnnamed(runs[0] ?? again)).toBe(false)
-  const many = Array.from({ length: 40 }, (_, i) => ({ ...t, key: `k${i}`, flowPipelineId: String(i) }))
-  expect(many.reduce((acc, m, i) => addRun(acc, m, i), [] as DeployRun[]).length).toBe(30)
+  const many = Array.from({ length: LIST_MAX + 10 }, (_, i) => ({ ...t, key: `k${i}`, flowPipelineId: String(i) }))
+  expect(many.reduce((acc, m, i) => addRun(acc, m, i), [] as DeployRun[]).length).toBe(LIST_MAX)
 })
 
 test('pipelineLabel reads app, stage and env from an AppStack-made pipeline name', () => {

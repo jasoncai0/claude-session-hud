@@ -1,4 +1,5 @@
 import type { DocLink, DocOrigin } from '../../types'
+import { LIST_MAX } from '../settings'
 
 const HOSTS = String.raw`[\w-]+(?:\.[\w-]+)*\.(?:feishu\.cn|larksuite\.com|larkoffice\.com|feishu\.net)`
 const KINDS = 'docx|docs|doc|wiki|sheets|sheet|base|bitable|mindnotes|mindnote|slides|file'
@@ -7,7 +8,6 @@ const URL_RE = new RegExp(String.raw`https?://(${HOSTS})/(${KINDS})/([A-Za-z0-9]
 const MD_LINK_RE = /\[([^\]\n]{1,200})\]\((https?:\/\/[^)\s]+)\)/g
 const CREATE_RE = /\blark-cli\b[^\n;&|]*?\s\+(?:create|import|copy|duplicate)\b/
 /** Mentions kept per session; created documents are always kept. */
-const MAX_MENTIONED = 30
 
 export type FoundDoc = { token: string; url: string; kind: string; label?: string; title?: string }
 
@@ -127,6 +127,6 @@ export function mergeDocs(known: readonly DocLink[], found: readonly FoundDoc[],
   })
   const tokens = new Set(fresh.map(d => d.token))
   const all = [...fresh, ...known.filter(d => !tokens.has(d.token))]
-  const keptMentions = new Set(all.filter(d => d.origin === 'mentioned').slice(0, MAX_MENTIONED).map(d => d.token))
+  const keptMentions = new Set(all.filter(d => d.origin === 'mentioned').slice(0, LIST_MAX).map(d => d.token))
   return all.filter(d => d.origin === 'created' || keptMentions.has(d.token))
 }

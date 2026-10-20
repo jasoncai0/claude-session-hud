@@ -1,8 +1,8 @@
 import type { Check, CheckStatus, MrView } from '../../types'
+import { LIST_MAX } from '../settings'
 
 export const API_BASE = 'https://openapi-rdc.aliyuncs.com/oapi/v1/codeup/organizations'
 export const TOKEN_VAR = 'ALIBABA_CLOUD_YUNXIAO_ACCESS_TOKEN'
-const MAX_SHOWN = 3
 const CLOSED_STATES = new Set(['MERGED', 'CLOSED'])
 
 export type Repo = { org: string; path: string }
@@ -89,14 +89,14 @@ export function createdSince(list: readonly ApiChangeRequest[], since: number): 
 export const addPins = (known: readonly MrPin[], added: readonly MrPin[]): MrPin[] => {
   const key = (p: MrPin) => `${p.forge ?? 'codeup'}:${p.repoPath}!${p.localId}`
   const fresh = added.filter(p => !known.some(k => key(k) === key(p)))
-  return [...known, ...fresh]
+  return [...known, ...fresh].slice(-LIST_MAX)
 }
 
 /** Open MRs of the branch (newest first, capped); none open → the latest closed/merged one. */
 export function pickMrs<T extends ApiChangeRequest>(list: readonly T[], branch: string): T[] {
   const mine = list.filter(cr => cr.sourceBranch === branch)
   const open = mine.filter(isOpen)
-  return open.length ? open.slice(0, MAX_SHOWN) : mine.slice(0, 1)
+  return open.length ? open.slice(0, LIST_MAX) : mine.slice(0, 1)
 }
 
 /** +/- line counts of a Codeup compare, same as `git diff --shortstat target...source`. */

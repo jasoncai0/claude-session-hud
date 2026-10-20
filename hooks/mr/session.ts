@@ -1,7 +1,7 @@
 import type { MrView, RepoView } from '../../types'
+import { LIST_MAX } from '../settings'
 
 const MERGE = '🔀'
-const MAX_DIRS = 20
 
 /** How the forge numbers it: GitHub `#191`, Codeup `!191`. */
 export const mrRef = (mr: Pick<MrView, 'id' | 'forge'>) => `${mr.forge === 'github' ? '#' : '!'}${mr.id}`
@@ -22,7 +22,7 @@ export function dirsOf(tool: string, input: { file_path?: unknown; notebook_path
 /** Adds dirs, deduped, newest last, capped. */
 export function rememberDirs(known: readonly string[], added: readonly string[]): string[] {
   const merged = [...known.filter(d => !added.includes(d)), ...added]
-  return merged.slice(-MAX_DIRS)
+  return merged.slice(-LIST_MAX)
 }
 
 /** `/mr` output: one markdown line per MR, linked. */
