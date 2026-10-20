@@ -1,6 +1,7 @@
 import type { RenderElement } from 'claude-code'
 
-import type { MrView, SessionView } from '../../types'
+import type { MrView, RepoView, SessionView } from '../../types'
+import { shortError } from '../errors'
 import type { Settings } from '../settings'
 import { DISMISS_W, ICON_W, ID_W, STATE_W, TOGGLE_W, capRows, cell, foldButton, gap } from '../ui'
 import type { Fold, Section, Ui } from '../ui'
@@ -139,20 +140,41 @@ function summary(ui: Ui, mrs: readonly MrView[]): RenderElement[] {
   return rest > 0 ? [...shown, <Text key="mr-sum-more" dimColor>+{rest}</Text>] : shown
 }
 
+type MrError = { key: string; source: string; repo?: string; raw: string; isStale?: boolean }
+
+const errorOf = (r: RepoView): MrError[] =>
+  r.error ? [{ key: `${r.forge ?? 'codeup'}:${r.repo}`, source: r.forge === 'github' ? 'GitHub PR' : 'Codeup MR', repo: r.repo, raw: r.error, isStale: r.isStale }] : []
+
+/**
+ * One line per failed repo: where (GitHub PR / Codeup MR, the repo), a short reason, and whether it retries or kept the
+ * last rows; the raw message shows over the line on hover.
+ */
+function errorRow(ui: Ui, err: MrError): RenderElement {
+  const { Box, Text } = ui
+  const e = shortError(err.raw)
+  const next = e.isTransient ? (err.isStale ? '，显示上次结果，稍后重试' : '，稍后重试') : ''
+  const line = [err.source, err.repo, `${e.reason}${next}`].filter(Boolean).join(' · ')
+  return (
+    <Box key={`mr-err-${err.key}`} height={1} overflow="hidden">
+      <Text dimColor wrap="truncate-end">{line}</Text>
+      {e.reason === err.raw ? null : (
+        <Box position="absolute" top={0} left={0} display="none" hover={{ display: 'flex' }}>
+          <Text inverse wrap="truncate-end">{err.raw}</Text>
+        </Box>
+      )}
+    </Box>
+  )
+}
+
 /** The MR rows of the session's repos, dismissed ones left out; null with nothing to show. */
 export function mrSection(ui: Ui, state: MrState, settings: Settings, act: MrActions, fold: Fold): Section | null {
   const v = state.view
   if (!v) return null
   const mrs = v.repos.flatMap(r => r.mrs).filter(mr => !state.dismissed.includes(mrKey(mr)))
-  const errors = v.error ? [v.error] : v.repos.flatMap(r => (r.error ? [`${r.repo}: ${r.error}`] : []))
+  const errors = [...(v.error ? [{ key: 'session', source: 'Codeup MR', raw: v.error }] : []), ...v.repos.flatMap(errorOf)]
   if (!mrs.length && !errors.length) return null
-  const { Box, Text } = ui
   const rows = mrs.map(mr => row(ui, mr, settings, state.expanded === mrKey(mr), act))
-  const errorRows = errors.map(err => (
-    <Box key={`mr-err-${err}`} height={1} overflow="hidden">
-      <Text dimColor wrap="truncate-end">Codeup MR · {err}</Text>
-    </Box>
-  ))
+  const errorRows = errors.map(err => errorRow(ui, err))
   return {
     rows: [...capRows(ui, 'mr', rows, settings.mrMaxRows, '个 MR', fold), ...errorRows],
     summary: summary(ui, mrs),

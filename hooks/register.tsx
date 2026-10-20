@@ -16,7 +16,7 @@ import type { ApiChangeRequest, ApiCompare, ApiDetail, MrPin, Repo } from './mr/
 import { mrKey } from './mr/session'
 import { compareRange, findPrLinks, parseGithubRemote, pickPrs, prQuery, prView, prsOf } from './mr/github'
 import type { ApiPr, GhRepo } from './mr/github'
-import { dirsOf, mrList, rememberDirs } from './mr/session'
+import { dirsOf, keepLastMrs, mrList, rememberDirs } from './mr/session'
 import { mrLayout, mrSection } from './mr/view'
 import { LIST_MAX, MODULE_IDS, PLUGIN, settingsOf } from './settings'
 import type { Settings } from './settings'
@@ -232,8 +232,8 @@ async function pinnedViews($: EngineInterface, token: string | undefined, pins: 
   const github = await Promise.all([...ghByRepo].map(async ([path, ids]): Promise<RepoView> => {
     const [owner = '', name = ''] = path.split('/')
     return githubPrs($, { owner, name }, undefined, ids)
-      .then(mrs => ({ root: '', repo: path, branch: '', mrs }))
-      .catch((err: Error) => ({ root: '', repo: path, branch: '', mrs: [], error: err.message }))
+      .then((mrs): RepoView => ({ root: '', repo: path, branch: '', mrs, forge: 'github' }))
+      .catch((err: Error): RepoView => ({ root: '', repo: path, branch: '', mrs: [], error: err.message, forge: 'github' }))
   }))
   if (!token) return github
   const byRepo = new Map<string, number[]>()
@@ -278,8 +278,8 @@ async function repoView($: EngineInterface, token: string | undefined, root: str
   if (gh && branch) {
     const label = `${gh.owner}/${gh.name}`
     return githubPrs($, gh, branch, [])
-      .then(mrs => ({ root, repo: label, branch, mrs }))
-      .catch((err: Error) => ({ root, repo: label, branch, mrs: [], error: err.message }))
+      .then((mrs): RepoView => ({ root, repo: label, branch, mrs, forge: 'github' }))
+      .catch((err: Error): RepoView => ({ root, repo: label, branch, mrs: [], error: err.message, forge: 'github' }))
   }
   if (!token) return null
   const repo = parseRemote(remote)
@@ -308,7 +308,7 @@ async function refreshMrs($: EngineInterface, settings: Settings) {
   const repos = (await Promise.all(found.map(root => repoView($, token, root)))).filter((r): r is RepoView => r !== null)
   const shown = new Set(repos.flatMap(r => r.mrs.map(mrKey)))
   const pinned = pins.length ? await pinnedViews($, token, pins, shown) : []
-  const all = [...repos, ...pinned]
+  const all = keepLastMrs((await read($, mrView))?.repos ?? [], [...repos, ...pinned])
   const needsToken = !token && (pins.some(p => p.forge !== 'github') || (await codeupRootCount($, found)) > 0)
   await update($, mrView, (): SessionView => (needsToken ? { repos: all, error: NO_TOKEN } : { repos: all }))
 }

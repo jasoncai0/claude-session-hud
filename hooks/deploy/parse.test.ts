@@ -111,7 +111,9 @@ test('runOf flattens a getPipelineRun answer; progressOf names the job it stoppe
   expect(progressOf({ ...base, stages: [{ name: '构建', status: 'RUNNING', jobs: [{ name: '镜像构建', status: 'RUNNING' }] }] })).toBe('◐ 镜像构建 (0/1)')
   expect(progressOf({ ...base, stages: [{ name: '部署', status: 'SUCCESS', jobs: [{ name: '全量发布', status: 'SUCCESS' }] }] })).toBe('✓ 全量发布 (1/1)')
   expect(progressOf({ ...base, number: undefined, stages: undefined })).toBe('等待运行开始')
-  expect(progressOf({ ...base, error: 'AppStack 403' })).toBe('查询失败：AppStack 403')
+  expect(progressOf({ ...base, error: 'AppStack 403' })).toBe('查询失败：无权限')
+  expect(progressOf({ ...base, error: 'TLS handshake timeout' })).toBe('✕ 灰度人工卡点 (2/4)')
+  expect(progressOf({ ...base, stages: undefined, error: 'TLS handshake timeout' })).toBe('查询失败：网络超时，稍后重试')
 })
 
 test('findStageTargets finds every stage link once; envOfStage names the env', () => {

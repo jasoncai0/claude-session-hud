@@ -44,10 +44,10 @@ const releaseRun = (status: string) => ({
   },
 })
 
-type World = { cwd?: string; branch?: string; calls?: string[]; extra?: object[]; toolText?: string; isBranchGone?: boolean; detail?: object; state?: string; release?: { status: string }; larkTimeouts?: { left: number } }
+type World = { cwd?: string; branch?: string; calls?: string[]; extra?: object[]; toolText?: string; isBranchGone?: boolean; detail?: object; state?: string; release?: { status: string }; larkTimeouts?: { left: number }; ghDown?: { isOn: boolean } }
 
 /** Two Codeup checkouts (/w/demo-api is the cwd, /w/billing-svc), lark-cli answering titles, a tool bottom echoing `toolText`. */
-function world(on: On, { cwd = '/w/demo-api/src', branch = 'feat', calls = [], extra = [], toolText = '', isBranchGone = false, detail = DETAIL, state = 'TO_BE_MERGED', release = { status: 'RUNNING' }, larkTimeouts = { left: 0 } }: World = {}) {
+function world(on: On, { cwd = '/w/demo-api/src', branch = 'feat', calls = [], extra = [], toolText = '', isBranchGone = false, detail = DETAIL, state = 'TO_BE_MERGED', release = { status: 'RUNNING' }, larkTimeouts = { left: 0 }, ghDown = { isOn: false } }: World = {}) {
   mock.env(on, { ALIBABA_CLOUD_YUNXIAO_ACCESS_TOKEN: 'pt-test', HOME: '/home/me' })
   const clock = mock.clock(on, { now: Date.parse('2026-10-15T10:00:00Z') })
   on('ui.log', async (_$, e) => {
@@ -71,6 +71,7 @@ function world(on: On, { cwd = '/w/demo-api/src', branch = 'feat', calls = [], e
     }
     if (String(e.argv[0]).endsWith('gh')) {
       calls.push(`gh ${e.argv.slice(1, 3).join(' ')}`)
+      if (ghDown.isOn) return { value: { exitCode: 1, stdout: '', stderr: 'Post "https://api.github.com/graphql": net/http: TLS handshake timeout', isStdoutTruncated: false, isStderrTruncated: false } }
       const isCompare = String(e.argv[2]).includes('/compare/')
       const ghPr = (n: number, ref: string) => ({
         number: n, url: `https://github.com/acme/gh-app/pull/${n}`, title: `t${n}`, state: 'OPEN', isDraft: false, merged: false, additions: 12, deletions: 3,
@@ -352,6 +353,20 @@ test('a GitHub checkout the session works in shows its PR with the same checks, 
   expect(await ui.find({ type: 'Text', text: '落后 main 3 个提交' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'CI 失败：build' })).toBeDefined()
   expect(calls.some(c => c.startsWith('gh api graphql'))).toBe(true)
+  await ui.unmount()
+})
+
+test('a GitHub fetch that times out keeps the last PR rows and says so in one short line', async ($, on) => {
+  const ghDown = { isOn: false }
+  world(on, { ghDown })
+  await bash($, 'cd /w/gh-app && git status')
+  await $.turn.complete(turn())
+  ghDown.isOn = true
+  await $.turn.complete(turn())
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...BAND })
+  expect(await ui.find({ type: 'Link', text: '#7' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'GitHub PR · acme/gh-app · 网络超时，显示上次结果，稍后重试' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Post "https://api.github.com/graphql": net/http: TLS handshake timeout' })).toBeDefined()
   await ui.unmount()
 })
 

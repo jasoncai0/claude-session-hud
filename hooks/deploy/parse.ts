@@ -1,4 +1,5 @@
 import type { DeployRun, DeployStage } from '../../types'
+import { shortError } from '../errors'
 import { LIST_MAX } from '../settings'
 
 const STAGE_URL_RE = /https:\/\/devops\.aliyun\.com\/appstack\/app\/([\w.-]+)\/workflow\/([0-9a-f]{32})\/stage\/([0-9a-f]{32})/
@@ -201,8 +202,12 @@ export function stateOf(status: string | undefined): { label: string; glyph: str
  * `✕ 灰度人工卡点`, `◐ 预热发布`, `✓ 全量发布`.
  */
 export function progressOf(r: DeployRun): string {
-  if (r.error) return `查询失败：${r.error}`
   const jobs = (r.stages ?? []).flatMap(s => s.jobs)
+  if (r.error) {
+    const e = shortError(r.error)
+    // A blip with stages already read: show them; the next poll tries again.
+    if (!(e.isTransient && jobs.length)) return `查询失败：${e.reason}${e.isTransient ? '，稍后重试' : ''}`
+  }
   if (!jobs.length) return r.number ? `#${r.number}` : '等待运行开始'
   const current = jobs.find(j => j.status !== 'SUCCESS' && j.status !== 'SKIPPED') ?? jobs[jobs.length - 1]
   const done = jobs.filter(j => j.status === 'SUCCESS').length

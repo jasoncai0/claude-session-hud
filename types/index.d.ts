@@ -22,7 +22,16 @@ export type MrView = {
 }
 
 /** One Codeup repo the session works in: its checkout, branch and the branch's MRs. */
-export type RepoView = { root: string; repo: string; branch: string; mrs: MrView[]; error?: string }
+export type RepoView = {
+  root: string
+  repo: string
+  branch: string
+  mrs: MrView[]
+  error?: string
+  forge?: 'github'
+  /** The rows are the last good fetch's, kept while this one failed. */
+  isStale?: boolean
+}
 
 export type SessionView = { repos: RepoView[]; error?: string }
 
