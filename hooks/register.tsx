@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { DeployRun, DocLink, DocOrigin, MrView, RepoView, SessionView, Usage } from '../types'
-import { addRun, envOfStage, findStageTargets, isSettled, isUnnamed, pickExecution, pipelineLabel, runOf, triggersOf } from './deploy/parse'
+import { addRun, envOfStage, findStageTargets, isSettled, isUnnamed, pickExecution, pipelineLabel, runOf, stageOfPipeline, stageUrl, triggersOf } from './deploy/parse'
 import type { ApiPipelineRun } from './deploy/parse'
 import { deployList, deploySection } from './deploy/view'
 import { artifactsOfCall, findAllDocs, findDocs, htmlTitle, isCreation, isLarkTool, mergeDocs } from './docs/links'
@@ -80,6 +80,8 @@ let orgCache: string | undefined
 let platformUser: { id?: string; lastOrganization?: string } | undefined
 /** Flow pipeline names by id, read once: they name a run whose call did not (a loop over `$app`). */
 const pipelineNames = new Map<string, string>()
+/** Each app's `releaseWorkflows` answer, read once: it maps a Flow pipeline to its AppStack release stage. */
+const appWorkflows = new Map<string, unknown>()
 /** The gh that ran; null once none was found. */
 let ghCli: string | null | undefined
 /** Release-stage names per `${app}/${workflowSn}`, read once: they name a tracked run's env. */
@@ -459,6 +461,16 @@ async function pipelineOf($: EngineInterface, token: string, org: string, r: Dep
   return { app: label.app, ...(r.stageName || !label.stageName ? {} : { stageName: label.stageName }), ...(r.env || !label.env ? {} : { env: label.env }) }
 }
 
+/** The AppStack release stage a Flow-only run belongs to, so its row links the stage page rather than the Flow run. */
+async function appStageOf($: EngineInterface, token: string, org: string, app: string, r: DeployRun): Promise<Partial<DeployRun>> {
+  const id = r.flowPipelineId
+  if (r.stageSn || !id || isUnnamed({ app, flowPipelineId: id })) return {}
+  if (!appWorkflows.has(app)) appWorkflows.set(app, await getJson<unknown>($, token, `${APPSTACK_BASE}/${org}/apps/${encodeURIComponent(app)}/releaseWorkflows`, 'AppStack'))
+  const stage = stageOfPipeline(appWorkflows.get(app), id)
+  if (!stage) return {}
+  return { workflowSn: stage.workflowSn, stageSn: stage.stageSn, url: stageUrl(app, stage.workflowSn, stage.stageSn), ...(r.stageName || !stage.stageName ? {} : { stageName: stage.stageName }) }
+}
+
 /** The stage's name and env, for a run whose trigger did not print them (a tracked link, a direct API call). */
 async function stageOf($: EngineInterface, token: string, org: string, r: DeployRun): Promise<Partial<DeployRun>> {
   if (r.stageName || !r.stageSn) return {}
@@ -477,7 +489,9 @@ async function stageOf($: EngineInterface, token: string, org: string, r: Deploy
  */
 async function fetchRun($: EngineInterface, token: string, org: string, r: DeployRun): Promise<Partial<DeployRun>> {
   if (r.flowPipelineId && r.flowRunId) {
-    const stage = { ...(await stageOf($, token, org, r).catch(() => ({}))), ...(await pipelineOf($, token, org, r).catch(() => ({}))) }
+    const named = await pipelineOf($, token, org, r).catch((): Partial<DeployRun> => ({}))
+    const appStage = await appStageOf($, token, org, named.app ?? r.app, r).catch(() => ({}))
+    const stage = { ...(await stageOf($, token, org, r).catch(() => ({}))), ...named, ...appStage }
     const flowRun = await getJson<ApiPipelineRun['pipelineRun']>($, token, `${FLOW_BASE}/${org}/pipelines/${r.flowPipelineId}/runs/${r.flowRunId}`, 'Flow')
     const { branch, ...run } = runOf({ pipelineRun: flowRun })
     return { ...stage, number: r.flowRunId, ...run, ...(r.branch || !branch ? {} : { branch }) }

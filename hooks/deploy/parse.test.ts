@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 
 import type { DeployRun } from '../../types'
 import { LIST_MAX } from '../settings'
-import { addRun, envOfStage, findStageTargets, isSettled, isUnnamed, pickExecution, pipelineLabel, progressOf, runOf, stateOf, triggersOf } from './parse'
+import { addRun, envOfStage, findStageTargets, isSettled, isUnnamed, pickExecution, pipelineLabel, progressOf, runOf, stageOfPipeline, stateOf, triggersOf } from './parse'
 
 const WF = '0123456789abcdef0123456789abcdef'
 const ST = 'fedcba9876543210fedcba9876543210'
@@ -162,4 +162,14 @@ test('pipelineLabel reads app, stage and env from an AppStack-made pipeline name
   expect(pipelineLabel('demo-api-标准发布流程-生产阶段')).toEqual({ app: 'demo-api', stageName: '生产阶段', env: 'prod' })
   expect(pipelineLabel('billing-svc-cn-标准发布流程-预发阶段_cn')).toEqual({ app: 'billing-svc-cn', stageName: '预发阶段_cn', env: 'pre' })
   expect(pipelineLabel('my-custom-pipeline')).toEqual({ app: 'my-custom-pipeline' })
+})
+
+test('stageOfPipeline finds the release stage that runs a Flow pipeline', () => {
+  const workflows = [
+    { sn: 'w1', releaseStages: [{ sn: 's-test', name: '测试阶段', pipeline: { id: 11 } }] },
+    { sn: WF, releaseStages: [{ sn: 's-pre', name: '预发阶段', pipeline: null }, { sn: ST, name: '生产阶段', pipeline: { id: 1234567 } }] },
+  ]
+  expect(stageOfPipeline(workflows, '1234567')).toEqual({ workflowSn: WF, stageSn: ST, stageName: '生产阶段' })
+  expect(stageOfPipeline(workflows, '999')).toBe(undefined)
+  expect(stageOfPipeline({ error: 'x' }, '11')).toBe(undefined)
 })

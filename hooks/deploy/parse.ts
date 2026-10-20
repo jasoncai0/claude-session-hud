@@ -19,12 +19,16 @@ export type DeployTarget = Omit<DeployRun, 'triggeredAt' | 'number' | 'status' |
 const flagOf = (cmd: string, flag: string): string | undefined => cmd.match(new RegExp(`--${flag}[=\\s]+['"]?([\\w.-]+)`))?.[1]
 const lineOf = (out: string, label: string): string | undefined => out.match(new RegExp(`^\\s*${label}\\s*:\\s*(.+?)\\s*$`, 'm'))?.[1]
 
+/** The AppStack page of a release stage's current run. */
+export const stageUrl = (app: string, workflowSn: string, stageSn: string): string =>
+  `https://devops.aliyun.com/appstack/app/${app}/workflow/${workflowSn}/stage/${stageSn}/current`
+
 const target = (app: string, workflowSn: string, stageSn: string, extra: Partial<DeployTarget>): DeployTarget => ({
   key: `${app}/${stageSn}`,
   app,
   workflowSn,
   stageSn,
-  url: `https://devops.aliyun.com/appstack/app/${app}/workflow/${workflowSn}/stage/${stageSn}/current`,
+  url: stageUrl(app, workflowSn, stageSn),
   ...Object.fromEntries(Object.entries(extra).filter(([, v]) => v)),
 })
 
@@ -107,6 +111,19 @@ export function findStageTargets(text: string): DeployTarget[] {
     if (app && wf && stage && !found.has(`${app}/${stage}`)) found.set(`${app}/${stage}`, target(app, wf, stage, {}))
   }
   return [...found.values()]
+}
+
+type ApiWorkflow = { sn?: unknown; releaseStages?: { sn?: unknown; name?: unknown; pipeline?: { id?: unknown } | null }[] }
+
+/** The release stage whose Flow pipeline is `pipelineId`, from an app's `releaseWorkflows` answer. */
+export function stageOfPipeline(workflows: unknown, pipelineId: string): Pick<DeployRun, 'workflowSn' | 'stageSn' | 'stageName'> | undefined {
+  for (const w of Array.isArray(workflows) ? (workflows as ApiWorkflow[]) : []) {
+    const s = (w.releaseStages ?? []).find(st => String(st.pipeline?.id ?? '') === pipelineId)
+    if (s && typeof w.sn === 'string' && typeof s.sn === 'string') {
+      return { workflowSn: w.sn, stageSn: s.sn, ...(typeof s.name === 'string' ? { stageName: s.name } : {}) }
+    }
+  }
+  return undefined
 }
 
 /**

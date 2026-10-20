@@ -29,6 +29,7 @@ const bash = ($: unknown, command: string) => ($ as ToolCaller).tool.call({ tool
 
 const WF = '0123456789abcdef0123456789abcdef'
 const ST = 'fedcba9876543210fedcba9876543210'
+const ST_CN = 'abcdefabcdefabcdefabcdefabcdefab'
 const STAGE_URL = `https://devops.aliyun.com/appstack/app/demo-api/workflow/${WF}/stage/${ST}/current`
 const DEPLOY_CMD = 'bash ~/.claude/skills/yunxiao-deploy/scripts/deploy.sh demo-api prod release/online --feature "公开字段可读" --yes'
 const DEPLOY_OUT = [' Env     : prod  (stage: 生产 / workflow: 标准发布流程)', ' Branch  : release/online', ' Feature : 公开字段可读', `Triggered. View: ${STAGE_URL}`].join('\n')
@@ -95,6 +96,11 @@ function world(on: On, { cwd = '/w/demo-api/src', branch = 'feat', calls = [], e
     calls.push(e.url)
     if (e.url.includes('/releaseStageBriefs')) {
       return { value: { status: 200, ok: true, headers: {}, text: JSON.stringify([{ sn: ST, name: '生产阶段' }]) } }
+    }
+    if (e.url.endsWith('/releaseWorkflows')) {
+      // Large in real life (each stage carries its pipeline YAML); only the stage → pipeline id link matters here.
+      const stages = [{ sn: ST, name: '生产阶段', pipeline: { id: 1234567 } }, { sn: ST_CN, name: '生产阶段_cn', pipeline: { id: 7654321 } }]
+      return { value: { status: 200, ok: true, headers: {}, text: JSON.stringify([{ sn: WF, name: '标准发布流程', releaseStages: stages }]) } }
     }
     if (e.url.includes('/appstack/')) {
       const body = e.url.includes(':getPipelineRun') ? releaseRun(release.status) : { data: [{ number: '194', startTime: '2026-10-15T10:00:03Z', state: release.status }] }
@@ -285,15 +291,15 @@ test('/deploys <link> tracks the stage and lists it', async ($, on) => {
   expect(out.text).toContain('运行中 #194')
 })
 
-test('two deploys in one command, output cut to its Flow run lines, both show and read the Flow runs', async ($, on) => {
+test('two deploys in one command, output cut to its Flow run lines, both show their AppStack stage and read the Flow runs', async ($, on) => {
   const calls: string[] = []
   const toolText = ['=== demo-api ===', 'Flow run:      https://flow.aliyun.com/pipelines/1234567/builds/196', '=== demo-api-cn ===', 'Flow run:      https://flow.aliyun.com/pipelines/7654321/builds/18'].join('\n')
   const clock = world(on, { calls, toolText, release: { status: 'RUNNING' } })
   await bash($, 'bash deploy.sh demo-api prod release/online --yes 2>&1 | grep "Flow run"\nbash deploy.sh demo-api-cn prod release/prod --yes 2>&1 | grep "Flow run"')
   await clock.advance(5_000)
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...BAND })
-  expect((await ui.find({ type: 'Link', text: 'demo-api' }))?.props.href).toBe('https://flow.aliyun.com/pipelines/1234567/builds/196')
-  expect((await ui.find({ type: 'Link', text: 'demo-api-cn' }))?.props.href).toBe('https://flow.aliyun.com/pipelines/7654321/builds/18')
+  expect((await ui.find({ type: 'Link', text: 'demo-api' }))?.props.href).toBe(STAGE_URL)
+  expect((await ui.find({ type: 'Link', text: 'demo-api-cn' }))?.props.href).toBe(`https://devops.aliyun.com/appstack/app/demo-api-cn/workflow/${WF}/stage/${ST_CN}/current`)
   expect(calls.some(u => u.includes(`/flow/organizations/${ORG}/pipelines/7654321/runs/18`))).toBe(true)
   expect(calls.some(u => u.includes('/executions'))).toBe(false)
   await ui.unmount()
@@ -310,6 +316,8 @@ test('outside any repo, a loop of 12 deploys keeps every run, reads the org from
   expect(ids.every(id => out.text?.includes(`**svc${id}**`))).toBe(true)
   expect(out.text).not.toContain('流水线 ')
   expect(out.text).not.toContain('查询失败')
+  // No AppStack stage runs these pipelines: the row keeps its Flow run link.
+  expect(out.text).toContain('(https://flow.aliyun.com/pipelines/1012/builds/12)')
   expect(calls.some(u => u.includes(`/flow/organizations/${ORG}/pipelines/1012/runs/12`))).toBe(true)
 })
 
