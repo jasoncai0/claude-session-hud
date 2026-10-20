@@ -8,7 +8,9 @@ const FLOW_RUN_RE = /https:\/\/flow\.aliyun\.com\/pipelines\/(\d+)\/builds\/(\d+
 const DRY_RUN_RE = /\s--(?:dry-run|cli-dry-run)\b/
 const EXECUTE_RE = /\bapp-stack-execute-change-request-release-stage\b/
 /** Runs kept per session; the oldest drop off. */
-const MAX_RUNS = 10
+const MAX_RUNS = 30
+/** An AppStack-made Flow pipeline's name: `<app>-<workflow>-<stage>`, e.g. `demo-api-标准发布流程-生产阶段`. */
+const PIPELINE_NAME_RE = /^(.+)-([^-]+)-([^-]+阶段[^-]*)$/
 /** How much earlier than the trigger an execution may start and still be its run (clock skew). */
 const START_SLACK_MS = 2 * 60_000
 
@@ -34,9 +36,20 @@ const literal = (word: string | undefined): string | undefined => {
 }
 
 /** A Flow run page: what a release is when deploy.sh's output was cut down to its `Flow run:` line. */
+const unnamed = (pipelineId: string): string => `流水线 ${pipelineId}`
+
+/** A Flow-only run whose call named no app (a loop over `$app`): its row is named from the pipeline once read. */
+export const isUnnamed = (r: Pick<DeployRun, 'app' | 'flowPipelineId'>): boolean => Boolean(r.flowPipelineId) && r.app === unnamed(r.flowPipelineId ?? '')
+
+/** What a Flow pipeline's name says about its run: the app, and the stage and env when AppStack named it. */
+export function pipelineLabel(name: string): Pick<DeployRun, 'app' | 'stageName' | 'env'> {
+  const m = name.match(PIPELINE_NAME_RE)
+  return m?.[1] && m[3] ? { app: m[1], stageName: m[3], env: envOfStage(m[3]) } : { app: name }
+}
+
 const flowTarget = (pipelineId: string, runId: string, extra: Partial<DeployTarget>): DeployTarget => ({
   key: `flow/${pipelineId}`,
-  app: extra.app ?? `流水线 ${pipelineId}`,
+  app: extra.app ?? unnamed(pipelineId),
   workflowSn: '',
   stageSn: '',
   url: `https://flow.aliyun.com/pipelines/${pipelineId}/builds/${runId}`,
@@ -97,10 +110,16 @@ export function findStageTargets(text: string): DeployTarget[] {
   return [...found.values()]
 }
 
-/** Adds a run, newest first; triggering (or tracking) a stage again starts its entry over. */
+/**
+ * Adds a run, newest first; triggering (or tracking) a stage again starts its entry over. The same Flow pipeline is the
+ * same stage however it was recorded (stage page or `Flow run:` link), and an unnamed one keeps the name it had.
+ */
 export function addRun(known: readonly DeployRun[], t: DeployTarget, now: number, isTracked = false): DeployRun[] {
-  const run: DeployRun = isTracked ? { ...t, triggeredAt: now, isTracked } : { ...t, triggeredAt: now }
-  return [run, ...known.filter(r => r.key !== t.key)].slice(0, MAX_RUNS)
+  const isSame = (r: DeployRun) => r.key === t.key || (t.flowPipelineId !== undefined && r.flowPipelineId === t.flowPipelineId)
+  const prior = known.find(r => isSame(r) && !isUnnamed(r))
+  const named = isUnnamed(t) && prior ? { ...t, app: prior.app, ...(prior.stageName && !t.stageName ? { stageName: prior.stageName } : {}) } : t
+  const run: DeployRun = isTracked ? { ...named, triggeredAt: now, isTracked } : { ...named, triggeredAt: now }
+  return [run, ...known.filter(r => !isSame(r))].slice(0, MAX_RUNS)
 }
 
 const ENV_KEYWORDS: readonly (readonly [string, RegExp])[] = [['prod', /生产|线上|正式|prod/i], ['pre', /预发|灰度|staging|pre/i], ['test', /测试|日常|daily|test/i]]

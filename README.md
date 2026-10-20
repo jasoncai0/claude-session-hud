@@ -204,7 +204,7 @@ GitHub PR 的状态与 Codeup 对齐：草稿 → 草稿；已获批准且可直
 
 **跟踪已有发布**（不会发布任何东西）：在消息里贴 AppStack 阶段链接，或执行 `/deploys <阶段链接>`，即跟踪该阶段**最新一次执行**。适合查看在网页上或别的会话里触发的发布。环境由阶段名推出（生产阶段 → prod），分支取自这次运行。
 
-再次触发或跟踪同一个阶段时，这一行会重新开始。每个会话保留最近 10 次发布。
+再次触发或跟踪同一个阶段时（同一条 Flow 流水线，无论记录的是阶段链接还是 `Flow run:` 链接），这一行会重新开始。每个会话保留最近 30 次发布。用变量循环发布（`deploy.sh "$app" …`）时，行名从 Flow 流水线名读出（`<应用>-<流程>-<阶段>` → 应用名、阶段、环境）。
 
 | 列 | 说明 |
 | --- | --- |
@@ -279,7 +279,7 @@ Desktop 的 Code 标签页没有 `/config`，用 `/hud set` 修改；终端里�
   1. 插件配置 `token`
   2. 环境变量 `ALIBABA_CLOUD_YUNXIAO_ACCESS_TOKEN`
   3. `~/.zshrc`、`~/.zshenv`、`~/.zprofile`、`~/.bashrc`、`~/.profile` 中的 `export ALIBABA_CLOUD_YUNXIAO_ACCESS_TOKEN=...`（Desktop 不继承 shell 环境变量，所以会读这些文件）
-- **`deploy` 模块**还需要云效组织 ID，按以下顺序查找：环境变量 `ALIBABA_CLOUD_YUNXIAO_ORGANIZATION_ID`，shell 配置文件中的同名 export 行，最后取会话所在 Codeup 仓库 origin 中的组织 ID
+- **`deploy` 模块**还需要云效组织 ID，按以下顺序查找：环境变量 `ALIBABA_CLOUD_YUNXIAO_ORGANIZATION_ID`，shell 配置文件中的同名 export 行，会话涉及的任一 Codeup 仓库 origin 中的组织 ID，最后取令牌所属用户最近使用的组织（`platform/user` 的 `lastOrganization`，会话不在任何仓库里时用到）。找不到时不缓存，下次轮询重试
 - **GitHub PR** 通过本机的 [`gh`](https://cli.github.com/) 查询（使用 `gh auth login` 的登录态，需要 `repo` 权限），会在 `PATH`、`/opt/homebrew/bin`、`/usr/local/bin` 中查找；不需要云效令牌
 - **`docs` 模块**显示链接无需额外依赖；显示标题需要已登录的 [`lark-cli`](https://github.com/larksuite/cli)，会在 `PATH`、`/opt/homebrew/bin`、`/usr/local/bin` 中查找
 
@@ -348,6 +348,7 @@ claude plugin test .
 
 ## 更新记录
 
+- **0.7.3**：修复会话不在 Codeup 仓库里时发布行「查询失败：未找到云效组织 ID」（新增令牌所属用户的组织兜底，查不到不再永久缓存）；每会话保留的发布从 10 次增到 30 次；同一 Flow 流水线不再重复成行；变量循环发布的行用流水线名命名
 - **0.7.2**：发布的「检查」展开改为每个阶段一行（高度从逐任务一行缩到阶段数），MR 与发布的展开列表末尾都加 `⌃ 收起`，即使提示栏滚动、行首按钮不可见也能折叠
 - **0.7.1**：输入框上方出现卡片时，HUD 不再整体隐藏，改为在卡片上方显示一行摘要
 - **0.7.0**：文档模块支持 Claude Artifacts：本会话发布的页面（创建）、读取或提到的页面（提及），标题取发布文件的 `<title>`；新增 `docsArtifacts` 开关

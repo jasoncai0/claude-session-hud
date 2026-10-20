@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { DeployRun, DocLink, DocOrigin, MrView, RepoView, SessionView, Usage } from '../types'
-import { addRun, envOfStage, findStageTargets, isSettled, pickExecution, runOf, triggersOf } from './deploy/parse'
+import { addRun, envOfStage, findStageTargets, isSettled, isUnnamed, pickExecution, pipelineLabel, runOf, triggersOf } from './deploy/parse'
 import type { ApiPipelineRun } from './deploy/parse'
 import { deployList, deploySection } from './deploy/view'
 import { artifactsOfCall, findAllDocs, findDocs, htmlTitle, isCreation, isLarkTool, mergeDocs } from './docs/links'
@@ -63,6 +63,7 @@ const NO_ORG = '未找到云效组织 ID（设置 ALIBABA_CLOUD_YUNXIAO_ORGANIZA
 const ORG_VAR = 'ALIBABA_CLOUD_YUNXIAO_ORGANIZATION_ID'
 const APPSTACK_BASE = 'https://openapi-rdc.aliyuncs.com/oapi/v1/appstack/organizations'
 const FLOW_BASE = 'https://openapi-rdc.aliyuncs.com/oapi/v1/flow/organizations'
+const PLATFORM_USER = 'https://openapi-rdc.aliyuncs.com/oapi/v1/platform/user'
 /** A just-triggered stage needs a moment before its execution is listed. */
 const DEPLOY_FIRST_CHECK_MS = 5_000
 
@@ -74,8 +75,12 @@ const roots = new Map<string, string>()
 /** +/- per `${repo}!${id}@${head sha}`: the diff is fetched again only when the branch moves. */
 const stats = new Map<string, { additions: number; deletions: number }>()
 let tokenCache: { value: string | undefined } | null = null
-let orgCache: { value: string | undefined } | null = null
-let userIdCache: string | undefined
+/** Kept once found; until then each call looks again, so a session that starts outside a Codeup repo still finds it. */
+let orgCache: string | undefined
+/** The token owner, read once: their id (to find the MRs they create) and the org they last used. */
+let platformUser: { id?: string; lastOrganization?: string } | undefined
+/** Flow pipeline names by id, read once: they name a run whose call did not (a loop over `$app`). */
+const pipelineNames = new Map<string, string>()
 /** The gh that ran; null once none was found. */
 let ghCli: string | null | undefined
 /** Release-stage names per `${app}/${workflowSn}`, read once: they name a tracked run's env. */
@@ -322,12 +327,11 @@ async function pinMrs($: EngineInterface, settings: Settings, added: readonly Mr
  */
 async function pinCreatedMrs($: EngineInterface, settings: Settings, since: number) {
   const token = await cachedToken($, settings)
-  orgCache ??= { value: await resolveOrg($) }
-  const org = orgCache.value
+  const org = token ? await cachedOrg($, token) : undefined
   if (!token || !org) return
-  userIdCache ??= (await getJson<{ id?: string }>($, token, 'https://openapi-rdc.aliyuncs.com/oapi/v1/platform/user', 'Yunxiao')).id
-  if (!userIdCache) return
-  const list = await api<ApiChangeRequest[]>($, token, `${org}/changeRequests?authorIds=${userIdCache}&state=all&perPage=${AUTHOR_PAGE}&orderBy=created_at&sort=desc`)
+  const userId = (await userOf($, token)).id
+  if (!userId) return
+  const list = await api<ApiChangeRequest[]>($, token, `${org}/changeRequests?authorIds=${userId}&state=all&perPage=${AUTHOR_PAGE}&orderBy=created_at&sort=desc`)
   await pinMrs($, settings, createdSince(list, since - CREATE_SLACK_MS))
 }
 
@@ -413,8 +417,21 @@ async function lookupTitles($: EngineInterface) {
 
 // ── Yunxiao deploys ─────────────────────────────────────────────────────────────────────────────────────────────
 
-/** The Yunxiao organization: $ALIBABA_CLOUD_YUNXIAO_ORGANIZATION_ID, its export line in a shell profile, else the org of the session's Codeup repo. */
-async function resolveOrg($: EngineInterface): Promise<string | undefined> {
+async function userOf($: EngineInterface, token: string): Promise<{ id?: string; lastOrganization?: string }> {
+  platformUser ??= await getJson<{ id?: string; lastOrganization?: string }>($, token, PLATFORM_USER, 'Yunxiao')
+  return platformUser
+}
+
+async function cachedOrg($: EngineInterface, token: string): Promise<string | undefined> {
+  orgCache ??= await resolveOrg($, token)
+  return orgCache
+}
+
+/**
+ * The Yunxiao organization: $ALIBABA_CLOUD_YUNXIAO_ORGANIZATION_ID, its export line in a shell profile, the org of any
+ * Codeup repo the session works in, else the org the token's owner last used (a session outside any repo).
+ */
+async function resolveOrg($: EngineInterface, token: string): Promise<string | undefined> {
   const fromEnv = await $.env.get('ALIBABA_CLOUD_YUNXIAO_ORGANIZATION_ID')
   if (fromEnv) return fromEnv
   const home = await $.env.get('HOME')
@@ -422,8 +439,25 @@ async function resolveOrg($: EngineInterface): Promise<string | undefined> {
     const org = exportFromProfile(await $.fs.read(`${home}/${name}`).catch(() => ''), ORG_VAR)
     if (org) return org
   }
-  const root = (await sessionRoots($))[0]
-  return root ? parseRemote(await git($, root, 'remote', 'get-url', 'origin'))?.org : undefined
+  for (const root of await sessionRoots($)) {
+    const org = parseRemote(await git($, root, 'remote', 'get-url', 'origin'))?.org
+    if (org) return org
+  }
+  return (await userOf($, token).catch(() => undefined))?.lastOrganization || undefined
+}
+
+/** What the Flow pipeline's name says about an unnamed run: its app, stage and env. */
+async function pipelineOf($: EngineInterface, token: string, org: string, r: DeployRun): Promise<Partial<DeployRun>> {
+  const id = r.flowPipelineId
+  if (!id || !isUnnamed(r)) return {}
+  if (!pipelineNames.has(id)) {
+    const { name } = await getJson<{ name?: unknown }>($, token, `${FLOW_BASE}/${org}/pipelines/${id}`, 'Flow')
+    if (typeof name === 'string' && name) pipelineNames.set(id, name)
+  }
+  const name = pipelineNames.get(id)
+  if (!name) return {}
+  const label = pipelineLabel(name)
+  return { app: label.app, ...(r.stageName || !label.stageName ? {} : { stageName: label.stageName }), ...(r.env || !label.env ? {} : { env: label.env }) }
 }
 
 /** The stage's name and env, for a run whose trigger did not print them (a tracked link, a direct API call). */
@@ -444,7 +478,7 @@ async function stageOf($: EngineInterface, token: string, org: string, r: Deploy
  */
 async function fetchRun($: EngineInterface, token: string, org: string, r: DeployRun): Promise<Partial<DeployRun>> {
   if (r.flowPipelineId && r.flowRunId) {
-    const stage = await stageOf($, token, org, r).catch(() => ({}))
+    const stage = { ...(await stageOf($, token, org, r).catch(() => ({}))), ...(await pipelineOf($, token, org, r).catch(() => ({}))) }
     const flowRun = await getJson<ApiPipelineRun['pipelineRun']>($, token, `${FLOW_BASE}/${org}/pipelines/${r.flowPipelineId}/runs/${r.flowRunId}`, 'Flow')
     const { branch, ...run } = runOf({ pipelineRun: flowRun })
     return { ...stage, number: r.flowRunId, ...run, ...(r.branch || !branch ? {} : { branch }) }
@@ -463,8 +497,7 @@ async function refreshDeploys($: EngineInterface, settings: Settings, key?: stri
   const due = listOf<DeployRun>(await read($, deploys)).filter(r => (key ? r.key === key : !isSettled(r)) && !deployFetching.has(r.key))
   if (!due.length) return
   const token = await cachedToken($, settings)
-  orgCache ??= { value: await resolveOrg($) }
-  const org = orgCache.value
+  const org = token ? await cachedOrg($, token) : undefined
   due.forEach(r => deployFetching.add(r.key))
   const patches = await Promise.all(due.map(async r => {
     if (!token || !org) return [r.key, { error: token ? NO_ORG : NO_TOKEN }] as const

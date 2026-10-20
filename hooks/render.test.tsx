@@ -43,10 +43,10 @@ const releaseRun = (status: string) => ({
   },
 })
 
-type World = { branch?: string; calls?: string[]; extra?: object[]; toolText?: string; isBranchGone?: boolean; detail?: object; state?: string; release?: { status: string }; larkTimeouts?: { left: number } }
+type World = { cwd?: string; branch?: string; calls?: string[]; extra?: object[]; toolText?: string; isBranchGone?: boolean; detail?: object; state?: string; release?: { status: string }; larkTimeouts?: { left: number } }
 
 /** Two Codeup checkouts (/w/demo-api is the cwd, /w/billing-svc), lark-cli answering titles, a tool bottom echoing `toolText`. */
-function world(on: On, { branch = 'feat', calls = [], extra = [], toolText = '', isBranchGone = false, detail = DETAIL, state = 'TO_BE_MERGED', release = { status: 'RUNNING' }, larkTimeouts = { left: 0 } }: World = {}) {
+function world(on: On, { cwd = '/w/demo-api/src', branch = 'feat', calls = [], extra = [], toolText = '', isBranchGone = false, detail = DETAIL, state = 'TO_BE_MERGED', release = { status: 'RUNNING' }, larkTimeouts = { left: 0 } }: World = {}) {
   mock.env(on, { ALIBABA_CLOUD_YUNXIAO_ACCESS_TOKEN: 'pt-test', HOME: '/home/me' })
   const clock = mock.clock(on, { now: Date.parse('2026-10-15T10:00:00Z') })
   on('ui.log', async (_$, e) => {
@@ -56,7 +56,7 @@ function world(on: On, { branch = 'feat', calls = [], extra = [], toolText = '',
   on('session.start', async (_$, e) => ({ cwd: e.cwd }))
   on('command.register', async () => ({ value: undefined }) as never)
   on('prompt.submit', async (_$, e) => ({ text: e.text }) as never)
-  on('session.cwd', async () => ({ value: '/w/demo-api/src' }))
+  on('session.cwd', async () => ({ value: cwd }))
   on('session.usage', async () => ({ value: { rateLimits: [{ kind: 'five_hour', percentUsed: 42, resetsAt: '2999-01-01T00:00:00Z' }] } }) as never)
   on('process.run', async (_$, e) => {
     if (String(e.argv[0]).endsWith('lark-cli')) {
@@ -100,10 +100,12 @@ function world(on: On, { branch = 'feat', calls = [], extra = [], toolText = '',
       const body = e.url.includes(':getPipelineRun') ? releaseRun(release.status) : { data: [{ number: '194', startTime: '2026-10-15T10:00:03Z', state: release.status }] }
       return { value: { status: 200, ok: true, headers: {}, text: JSON.stringify(body) } }
     }
+    const pipeline = e.url.match(/\/flow\/organizations\/[^/]+\/pipelines\/(\d+)$/)
+    if (pipeline) return { value: { status: 200, ok: true, headers: {}, text: JSON.stringify({ id: Number(pipeline[1]), name: `svc${pipeline[1]}-标准发布流程-生产阶段` }) } }
     if (e.url.includes('/flow/organizations/')) {
       return { value: { status: 200, ok: true, headers: {}, text: JSON.stringify(releaseRun(release.status).pipelineRun) } }
     }
-    if (e.url.endsWith('/platform/user')) return { value: { status: 200, ok: true, headers: {}, text: '{"id":"u1"}' } }
+    if (e.url.endsWith('/platform/user')) return { value: { status: 200, ok: true, headers: {}, text: JSON.stringify({ id: 'u1', lastOrganization: ORG }) } }
     if (e.url.includes('authorIds=u1')) {
       const opened = { ...mrOf('billing-svc', 77, 'fix/space-online'), detailUrl: `https://codeup.aliyun.com/${ORG}/backend/billing-svc/change/77`, createdAt: '2026-10-15T18:00:30+08:00' }
       return { value: { status: 200, ok: true, headers: {}, text: JSON.stringify([opened]) } }
@@ -295,6 +297,20 @@ test('two deploys in one command, output cut to its Flow run lines, both show an
   expect(calls.some(u => u.includes(`/flow/organizations/${ORG}/pipelines/7654321/runs/18`))).toBe(true)
   expect(calls.some(u => u.includes('/executions'))).toBe(false)
   await ui.unmount()
+})
+
+test('outside any repo, a loop of 12 deploys keeps every run, reads the org from the token owner and names each pipeline', async ($, on) => {
+  const calls: string[] = []
+  const ids = Array.from({ length: 12 }, (_, i) => 1001 + i)
+  const toolText = ids.map((id, i) => `Flow run: https://flow.aliyun.com/pipelines/${id}/builds/${i + 1}`).join('\n')
+  const clock = world(on, { cwd: '/tmp/scratch', calls, toolText, release: { status: 'RUNNING' } })
+  await bash($, 'for app in $APPS; do bash deploy.sh "$app" prod --yes 2>&1 | grep "Flow run"; done')
+  await clock.advance(5_000)
+  const out = await $.command.run({ command: 'deploys', args: '' } as never) as { text?: string }
+  expect(ids.every(id => out.text?.includes(`**svc${id}**`))).toBe(true)
+  expect(out.text).not.toContain('流水线 ')
+  expect(out.text).not.toContain('查询失败')
+  expect(calls.some(u => u.includes(`/flow/organizations/${ORG}/pipelines/1012/runs/12`))).toBe(true)
 })
 
 test('an MR opened by a CLI call that prints only its id still shows, found by author and time', async ($, on) => {

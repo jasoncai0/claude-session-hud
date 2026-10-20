@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { DeployRun } from '../../types'
-import { addRun, envOfStage, findStageTargets, isSettled, pickExecution, progressOf, runOf, stateOf, triggersOf } from './parse'
+import { addRun, envOfStage, findStageTargets, isSettled, isUnnamed, pickExecution, pipelineLabel, progressOf, runOf, stateOf, triggersOf } from './parse'
 
 const WF = '0123456789abcdef0123456789abcdef'
 const ST = 'fedcba9876543210fedcba9876543210'
@@ -75,7 +75,7 @@ test('addRun puts the newest first and starts a re-triggered stage over', () => 
   const t = triggerOne('Bash', { command: CMD }, DEPLOY_OUT, false)
   if (!t) throw new Error('no trigger')
   const old: DeployRun = { ...t, triggeredAt: 1, number: '193', status: 'SUCCESS' }
-  const other: DeployRun = { ...t, key: 'x/y', app: 'x', triggeredAt: 2 }
+  const other: DeployRun = { ...t, key: 'x/y', app: 'x', flowPipelineId: '999', triggeredAt: 2 }
   const runs = addRun([other, old], t, 9)
   expect(runs.map(r => r.key)).toEqual([t.key, 'x/y'])
   expect(runs[0]?.number).toBe(undefined)
@@ -141,4 +141,24 @@ test('isSettled: only a pinned run in a final state stops being polled; stateOf 
   expect(stateOf('WAITING').label).toBe('待确认')
   expect(stateOf(undefined).label).toBe('查询中')
   expect(stateOf('ODD').label).toBe('ODD')
+})
+
+test('addRun: the same Flow pipeline replaces its row however it was recorded, keeping its name; 30 runs are kept', () => {
+  const t = triggerOne('Bash', { command: CMD }, DEPLOY_OUT, false)
+  if (!t) throw new Error('no trigger')
+  const loop = 'for x in a; do bash deploy.sh "$app" prod --yes | grep "Flow run"; done'
+  const [again] = triggersOf('Bash', { command: loop }, 'Flow run: https://flow.aliyun.com/pipelines/1234567/builds/195', false)
+  if (!again) throw new Error('no flow trigger')
+  expect(isUnnamed(again)).toBe(true)
+  const runs = addRun(addRun([], t, 1), again, 2)
+  expect(runs.map(r => `${r.key}|${r.app}|${r.flowRunId}`)).toEqual(['flow/1234567|demo-api|195'])
+  expect(isUnnamed(runs[0] ?? again)).toBe(false)
+  const many = Array.from({ length: 40 }, (_, i) => ({ ...t, key: `k${i}`, flowPipelineId: String(i) }))
+  expect(many.reduce((acc, m, i) => addRun(acc, m, i), [] as DeployRun[]).length).toBe(30)
+})
+
+test('pipelineLabel reads app, stage and env from an AppStack-made pipeline name', () => {
+  expect(pipelineLabel('demo-api-标准发布流程-生产阶段')).toEqual({ app: 'demo-api', stageName: '生产阶段', env: 'prod' })
+  expect(pipelineLabel('billing-svc-cn-标准发布流程-预发阶段_cn')).toEqual({ app: 'billing-svc-cn', stageName: '预发阶段_cn', env: 'pre' })
+  expect(pipelineLabel('my-custom-pipeline')).toEqual({ app: 'my-custom-pipeline' })
 })
