@@ -36,10 +36,34 @@ export const shortCountdown = (resetsAt: string | undefined, now: number): strin
   return `${Math.max(1, Math.floor(ms / MINUTE))}m`
 }
 
-export type Meter = { label: string; bar: string; percent: string; reset: string; level: Level }
+/** A token count as the status line says it: 950, 84k, 1.2M. */
+export const tokenCount = (n: number): string =>
+  n < 1_000 ? String(Math.round(n)) : n < 1_000_000 ? `${Math.round(n / 1_000)}k` : `${(n / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`
 
-// One meter per window with a fresh reading; empty means draw nothing.
-export const meters = (u: Usage, now: number): Meter[] =>
+export type Meter = { label: string; bar: string; percent: string; reset: string; level: Level; detail?: string }
+
+/** The context window's fill as a meter, `84k/200k` beside it; null before a response has reported one. */
+export function contextMeter(c: Usage['context']): Meter | null {
+  if (!c?.window) return null
+  const pct = c.percent ?? (c.tokens === undefined ? undefined : (c.tokens / c.window) * 100)
+  if (pct === undefined) return null
+  return {
+    label: '上下文',
+    bar: bar(pct),
+    percent: `${Math.round(pct)}%`,
+    reset: '',
+    level: levelOf(pct),
+    ...(c.tokens === undefined ? {} : { detail: `${tokenCount(c.tokens)}/${tokenCount(c.window)}` }),
+  }
+}
+
+// The context meter first (when asked for and read), then one per rate-limit window with a fresh reading; empty means draw nothing.
+export const meters = (u: Usage, now: number, withContext = false): Meter[] => [
+  ...(withContext ? [contextMeter(u.context)].filter((m): m is Meter => m !== null) : []),
+  ...rateMeters(u, now),
+]
+
+const rateMeters = (u: Usage, now: number): Meter[] =>
   u.rateLimits
     .filter(r => isFresh(r.resetsAt, now))
     .map(r => {

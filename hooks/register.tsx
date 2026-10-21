@@ -108,7 +108,10 @@ async function guard($: EngineInterface, id: string, step: () => Promise<unknown
 
 async function refreshUsage($: EngineInterface) {
   const u = await $.session.usage()
-  const next: Usage = { rateLimits: u.rateLimits }
+  // A host without a live window (a stub, an older engine) sends none: the context meter is then left out.
+  const c = u.context as Usage['context'] | undefined
+  const context = c?.window ? { window: c.window, ...(c.tokens === undefined ? {} : { tokens: c.tokens }), ...(c.percent === undefined ? {} : { percent: c.percent }) } : undefined
+  const next: Usage = { rateLimits: u.rateLimits, ...(context ? { context } : {}) }
   await update($, usage, () => next)
 }
 

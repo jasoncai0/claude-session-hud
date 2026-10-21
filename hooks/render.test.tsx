@@ -65,7 +65,7 @@ function world(on: On, { cwd = '/w/demo-api/src', branch = 'feat', calls = [], e
   on('store.set', async (_$, e) => (store.set(e.key, JSON.parse(JSON.stringify(e.value))), { value: undefined }) as never)
   on('store.delete', async (_$, e) => (store.delete(e.key), { value: undefined }) as never)
   on('store.keys', async () => ({ value: [...store.keys()] }) as never)
-  on('session.usage', async () => ({ value: { rateLimits: [{ kind: 'five_hour', percentUsed: 42, resetsAt: '2999-01-01T00:00:00Z' }] } }) as never)
+  on('session.usage', async () => ({ value: { rateLimits: [{ kind: 'five_hour', percentUsed: 42, resetsAt: '2999-01-01T00:00:00Z' }], context: { tokens: 84_200, window: 200_000, percent: 42 } } }) as never)
   on('process.run', async (_$, e) => {
     if (String(e.argv[0]).endsWith('lark-cli')) {
       calls.push(`lark ${e.argv.join(' ')}`)
@@ -478,6 +478,27 @@ test('a fresh process resuming a session puts its saved releases, docs and pins 
   expect(store.has('session:old')).toBe(false)
   expect(store.has('session:done-1')).toBe(false)
   expect(store.has(`session:${SESSION_ID}`)).toBe(true)
+  await ui.unmount()
+})
+
+for (const surface of ['terminal', 'desktop'] as const) {
+  test(`${surface}: the usage row shows the context window first, tokens beside it`, async ($, on) => {
+    world(on)
+    await $.session.start(START)
+    const ui = await $.ui.mount({ plugin: PLUGIN, surface, ...BAND })
+    expect(await ui.find({ type: 'Text', text: '上下文' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '84k/200k' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '5h' })).toBeDefined()
+    await ui.unmount()
+  })
+}
+
+test('usageContext off: no context meter', { options: { usageContext: false } }, async ($, on) => {
+  world(on)
+  await $.session.start(START)
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...BAND })
+  expect(await ui.find({ type: 'Text', text: '上下文' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: '5h' })).toBeDefined()
   await ui.unmount()
 })
 

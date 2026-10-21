@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { bar, isFresh, levelOf, meters, shortCountdown } from './format'
+import { bar, contextMeter, isFresh, levelOf, meters, shortCountdown, tokenCount } from './format'
 
 const NOW = Date.parse('2026-10-14T10:00:00Z')
 
@@ -47,4 +47,19 @@ test('meters drops stale windows and is empty when none are fresh', () => {
   const rows = { rateLimits: [{ kind: 'five_hour', percentUsed: 80, resetsAt: '2026-10-14T09:00:00Z' }, { kind: 'seven_day', percentUsed: 12, resetsAt: '2026-10-18T00:00:00Z' }] }
   expect(meters(rows, NOW).map(m => m.label)).toEqual(['7d'])
   expect(meters({ rateLimits: [] }, NOW)).toEqual([])
+})
+
+test('contextMeter shows the window fill with tokens beside it; none before a reading', () => {
+  expect(contextMeter({ tokens: 84_200, window: 200_000, percent: 42 })).toEqual({ label: '上下文', bar: '███░░░', percent: '42%', reset: '', level: 'success', detail: '84k/200k' })
+  expect(contextMeter({ tokens: 950_000, window: 1_000_000 })?.percent).toBe('95%')
+  expect(contextMeter({ tokens: 950_000, window: 1_000_000 })?.level).toBe('error')
+  expect(contextMeter({ window: 200_000 })).toBe(null)
+  expect(contextMeter(undefined)).toBe(null)
+  expect([tokenCount(950), tokenCount(84_200), tokenCount(1_000_000), tokenCount(1_250_000)]).toEqual(['950', '84k', '1M', '1.3M'])
+})
+
+test('meters puts the context first only when asked', () => {
+  const u = { rateLimits: [{ kind: 'seven_day', percentUsed: 7 }], context: { tokens: 50_000, window: 200_000, percent: 25 } }
+  expect(meters(u, NOW, true).map(m => m.label)).toEqual(['上下文', '7d'])
+  expect(meters(u, NOW).map(m => m.label)).toEqual(['7d'])
 })

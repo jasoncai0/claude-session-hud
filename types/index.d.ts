@@ -1,5 +1,7 @@
 export type Usage = {
   rateLimits: { kind: string; percentUsed: number; resetsAt?: string }[]
+  /** The live context window: tokens the last response was answered over, out of the model's window. */
+  context?: { tokens?: number; window: number; percent?: number }
 }
 
 export type CheckStatus = 'pass' | 'fail' | 'pending'

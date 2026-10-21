@@ -16,6 +16,7 @@ export const DEFAULTS = {
   deploy: true,
   collapsed: false,
   usageReset: true,
+  usageContext: true,
   mrMaxRows: 3,
   mrRepo: true,
   mrRepoWidth: 18,
