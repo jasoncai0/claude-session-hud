@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { isEmpty, snapshotOf, staleKeys } from './persist'
+import { archivedIdsOf, isEmpty, snapshotOf, staleKeys } from './persist'
 
 const DAY = 24 * 60 * 60_000
 
@@ -30,4 +30,11 @@ test('staleKeys keeps the 30 newest within 30 days, or the 10 newest when the st
   expect(staleKeys(saved, now)).toEqual(['s30', 's31', 's32', 's33', 's34'])
   expect(staleKeys(saved, now, true)).toHaveLength(25)
   expect(staleKeys([{ key: 'old', savedAt: now - 31 * DAY }, { key: 'new', savedAt: now }], now)).toEqual(['old'])
+})
+
+test('an archived session\'s snapshot is dropped, however new', () => {
+  const archived = archivedIdsOf('"cliSessionId":"aaa-1"\n"cliSessionId": "bbb-2"\nnoise')
+  expect([...archived]).toEqual(['aaa-1', 'bbb-2'])
+  const saved = [{ key: 'session:aaa-1', savedAt: 10 }, { key: 'session:ccc-3', savedAt: 9 }]
+  expect(staleKeys(saved, 10, false, archived)).toEqual(['session:aaa-1'])
 })

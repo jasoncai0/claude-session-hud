@@ -54,9 +54,19 @@ export function snapshotOf(value: unknown): Snapshot | null {
   }
 }
 
-/** The snapshot keys to drop: past the newest `KEPT_SESSIONS` (or `KEPT_WHEN_FULL` when full), or older than 30 days. */
-export function staleKeys(saved: readonly { key: string; savedAt: number }[], now: number, isFull = false): string[] {
+const CLI_SESSION_RE = /"cliSessionId"\s*:\s*"([\w-]+)"/g
+
+/** The CLI session ids in the desktop app's metadata of its archived sessions (`"cliSessionId":"…"` lines). */
+export const archivedIdsOf = (text: string): Set<string> => new Set([...text.matchAll(CLI_SESSION_RE)].flatMap(m => (m[1] ? [m[1]] : [])))
+
+/**
+ * The snapshot keys to drop: an archived session's, any past the newest `KEPT_SESSIONS` (`KEPT_WHEN_FULL` when the
+ * store is full), and any older than 30 days.
+ */
+export function staleKeys(saved: readonly { key: string; savedAt: number }[], now: number, isFull = false, archived: ReadonlySet<string> = new Set()): string[] {
   const kept = isFull ? KEPT_WHEN_FULL : KEPT_SESSIONS
   const newest = [...saved].sort((a, b) => b.savedAt - a.savedAt)
-  return newest.filter((s, i) => i >= kept || now - s.savedAt > MAX_AGE_MS).map(s => s.key)
+  return newest
+    .filter((s, i) => i >= kept || now - s.savedAt > MAX_AGE_MS || archived.has(s.key.slice(SNAPSHOT_PREFIX.length)))
+    .map(s => s.key)
 }

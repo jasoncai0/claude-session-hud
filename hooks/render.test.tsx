@@ -45,10 +45,10 @@ const releaseRun = (status: string) => ({
   },
 })
 
-type World = { cwd?: string; branch?: string; calls?: string[]; extra?: object[]; toolText?: string; isBranchGone?: boolean; detail?: object; state?: string; release?: { status: string }; larkTimeouts?: { left: number }; ghDown?: { isOn: boolean }; store?: Map<string, unknown> }
+type World = { cwd?: string; branch?: string; calls?: string[]; extra?: object[]; toolText?: string; isBranchGone?: boolean; detail?: object; state?: string; release?: { status: string }; larkTimeouts?: { left: number }; ghDown?: { isOn: boolean }; store?: Map<string, unknown>; archivedText?: string }
 
 /** Two Codeup checkouts (/w/demo-api is the cwd, /w/billing-svc), lark-cli answering titles, a tool bottom echoing `toolText`. */
-function world(on: On, { cwd = '/w/demo-api/src', branch = 'feat', calls = [], extra = [], toolText = '', isBranchGone = false, detail = DETAIL, state = 'TO_BE_MERGED', release = { status: 'RUNNING' }, larkTimeouts = { left: 0 }, ghDown = { isOn: false }, store = new Map<string, unknown>() }: World = {}) {
+function world(on: On, { cwd = '/w/demo-api/src', branch = 'feat', calls = [], extra = [], toolText = '', isBranchGone = false, detail = DETAIL, state = 'TO_BE_MERGED', release = { status: 'RUNNING' }, larkTimeouts = { left: 0 }, ghDown = { isOn: false }, store = new Map<string, unknown>(), archivedText = '' }: World = {}) {
   mock.env(on, { ALIBABA_CLOUD_YUNXIAO_ACCESS_TOKEN: 'pt-test', HOME: '/home/me' })
   const clock = mock.clock(on, { now: Date.parse('2026-10-15T10:00:00Z') })
   on('ui.log', async (_$, e) => {
@@ -76,6 +76,7 @@ function world(on: On, { cwd = '/w/demo-api/src', branch = 'feat', calls = [], e
       const title = String(e.argv[4]).includes('NewDoc') ? '新建的设计文档' : '权限设计（正式标题）'
       return { value: { exitCode: 0, stdout: JSON.stringify({ ok: true, data: { title } }), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     }
+    if (e.argv[0] === '/bin/sh') return { value: { exitCode: 0, stdout: archivedText, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     if (String(e.argv[0]).endsWith('gh')) {
       calls.push(`gh ${e.argv.slice(1, 3).join(' ')}`)
       if (ghDown.isOn) return { value: { exitCode: 1, stdout: '', stderr: 'Post "https://api.github.com/graphql": net/http: TLS handshake timeout', isStdoutTruncated: false, isStderrTruncated: false } }
@@ -465,15 +466,18 @@ test('a fresh process resuming a session puts its saved releases, docs and pins 
   const store = new Map<string, unknown>([
     [`session:${SESSION_ID}`, { savedAt: Date.parse('2026-10-15T09:00:00Z'), state: { deploys: [deploy], docs: [doc], mrPinned: [{ repoPath: 'acme/gh-app', localId: 8, forge: 'github' }] } }],
     ['session:old', { savedAt: 0, state: { mrDirs: ['/w/x'] } }],
+    ['session:done-1', { savedAt: Date.parse('2026-10-15T09:00:00Z'), state: { mrDirs: ['/w/y'] } }],
   ])
-  world(on, { store })
+  world(on, { store, archivedText: '"cliSessionId":"done-1"\n' })
   await $.session.start(START)
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...BAND })
   expect((await ui.find({ type: 'Link', text: 'demo-api' }))?.props.href).toBe(STAGE_URL)
   expect((await ui.find({ type: 'Link', text: '权限设计' }))?.props.href).toBe(DOC)
   expect(await ui.find({ type: 'Link', text: '#8' })).toBeDefined()
-  // A month-old snapshot is dropped as the session starts.
+  // A month-old snapshot and an archived session's are dropped as the session starts.
   expect(store.has('session:old')).toBe(false)
+  expect(store.has('session:done-1')).toBe(false)
+  expect(store.has(`session:${SESSION_ID}`)).toBe(true)
   await ui.unmount()
 })
 

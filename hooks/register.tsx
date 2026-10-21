@@ -18,7 +18,7 @@ import { compareRange, findPrLinks, parseGithubRemote, pickPrs, prQuery, prView,
 import type { ApiPr, GhRepo } from './mr/github'
 import { dirsOf, keepLastMrs, mrList, rememberDirs } from './mr/session'
 import { mrLayout, mrSection } from './mr/view'
-import { SNAPSHOT_PREFIX, isEmpty, snapshotOf, staleKeys } from './persist'
+import { SNAPSHOT_PREFIX, archivedIdsOf, isEmpty, snapshotOf, staleKeys } from './persist'
 import type { Saved } from './persist'
 import { LIST_MAX, MODULE_IDS, PLUGIN, settingsOf } from './settings'
 import type { Settings } from './settings'
@@ -584,11 +584,31 @@ async function savedOf($: EngineInterface): Promise<Saved> {
   }
 }
 
-/** Drops snapshots past the newest kept or a month old; `isFull` keeps fewer, to make room. */
+/** Where the desktop app keeps a JSON file per session, `isArchived` and `cliSessionId` among its fields. */
+const DESKTOP_SESSIONS = 'Library/Application Support/Claude/claude-code-sessions'
+/** Prints the `cliSessionId` line of each archived session's file; nothing where the app is not installed. */
+const ARCHIVED_SCRIPT = `grep -rl --include='local_*.json' '"isArchived":true' "$1" 2>/dev/null | while IFS= read -r f; do grep -o '"cliSessionId":"[^"]*"' "$f"; done; exit 0`
+const ARCHIVED_TIMEOUT_MS = 10_000
+
+/**
+ * The sessions archived in the desktop app. The app tells a plugin nothing when a session is archived (its process just
+ * ends), so its own session files are read. ponytail: reads the app's internal metadata; if its layout changes this
+ * finds nothing and the 30-session / 30-day cap still bounds the store.
+ */
+async function archivedSessions($: EngineInterface): Promise<Set<string>> {
+  const home = await $.env.get('HOME')
+  if (!home) return new Set()
+  const run = await $.process.run(['/bin/sh', '-c', ARCHIVED_SCRIPT, 'sh', `${home}/${DESKTOP_SESSIONS}`], { timeoutMs: ARCHIVED_TIMEOUT_MS })
+  return archivedIdsOf(run.stdout)
+}
+
+/** Drops archived sessions' snapshots and those past the newest kept or a month old; `isFull` keeps fewer, to make room. */
 async function pruneStore($: EngineInterface, isFull = false) {
   const keys = (await $.store.keys()).filter(k => k.startsWith(SNAPSHOT_PREFIX))
+  if (!keys.length) return
   const saved = await Promise.all(keys.map(async key => ({ key, savedAt: snapshotOf(await $.store.get(key))?.savedAt ?? 0 })))
-  for (const key of staleKeys(saved, await $.clock.now(), isFull)) await $.store.delete(key)
+  const archived = await archivedSessions($).catch(() => new Set<string>())
+  for (const key of staleKeys(saved, await $.clock.now(), isFull, archived)) await $.store.delete(key)
 }
 
 /** Writes the session's snapshot when it changed since the last write; a full store is pruned harder once. */
