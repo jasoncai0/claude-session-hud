@@ -7,6 +7,7 @@ import type { ApiPipelineRun } from './deploy/parse'
 import { deployList, deploySection } from './deploy/view'
 import { artifactsOfCall, findAllDocs, findDocs, htmlTitle, isCreation, isLarkTool, mergeDocs } from './docs/links'
 import type { FoundDoc } from './docs/links'
+import { CREATION_LINES_RE, createdInTranscript } from './docs/backfill'
 import { LARK_CLI, inspectArgv, isMissingProgram, lookupOf } from './docs/lookup'
 import type { Lookup } from './docs/lookup'
 import { docList, docsLayout, docsSection, visibleDocs } from './docs/view'
@@ -381,6 +382,23 @@ async function rememberToolDocs($: EngineInterface, tool: string, input: Readonl
   await rememberDocs($, made, 'created', settings)
 }
 
+/** Prints the session transcript's lines that matter for documents (pattern `$3`); nothing without a transcript. */
+const TRANSCRIPT_GREP = `f=$(ls "$1"/projects/*/"$2".jsonl 2>/dev/null | head -n 1); [ -n "$f" ] && grep -E -i -- "$3" "$f"; exit 0`
+const BACKFILL_TIMEOUT_MS = 20_000
+
+/**
+ * Marks 创建 the documents this session's own calls made, from its transcript, where a lost mark left them 提及 (a
+ * restart before the mark was saved, a fork that met them again). Once per process, off the session's path.
+ */
+async function backfillCreated($: EngineInterface) {
+  if (!listOf<DocLink>(await read($, docs)).some(d => d.origin === 'mentioned')) return
+  const dir = (await $.env.get('CLAUDE_CONFIG_DIR')) || `${(await $.env.get('HOME')) ?? ''}/.claude`
+  const run = await $.process.run(['/bin/sh', '-c', TRANSCRIPT_GREP, 'sh', dir, await $.session.id(), CREATION_LINES_RE], { timeoutMs: BACKFILL_TIMEOUT_MS })
+  const made = createdInTranscript(run.stdout)
+  if (!made.size) return
+  await update($, docs, list => listOf<DocLink>(list).map(d => (d.origin === 'mentioned' && made.has(d.token) ? { ...d, origin: 'created' as const } : d)))
+}
+
 /**
  * The document's title through lark-cli. Only a missing program moves on to the next install folder, and only when
  * none of them exists are lookups given up for the session; a timeout or other failure is retried on a later turn.
@@ -704,6 +722,7 @@ export const register: Register = (on, options) => {
     // Before any refresh: the pins, dirs and runs it reads may come back from the store.
     if (isAnyOn) {
       await guard($, 'persist', () => restoreSession($))
+      if (settings.docs) $.clock.after(0, () => void guard($, 'docs', () => backfillCreated($)))
       void guard($, 'persist', () => pruneStore($))
       $.clock.every(SAVE_EVERY_MS, () => void guard($, 'persist', () => saveSession($)))
     }

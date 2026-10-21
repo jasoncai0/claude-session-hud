@@ -45,10 +45,10 @@ const releaseRun = (status: string) => ({
   },
 })
 
-type World = { cwd?: string; branch?: string; calls?: string[]; extra?: object[]; toolText?: string; isBranchGone?: boolean; detail?: object; state?: string; release?: { status: string }; larkTimeouts?: { left: number }; ghDown?: { isOn: boolean }; store?: Map<string, unknown>; archivedText?: string; sessionRoot?: string }
+type World = { cwd?: string; branch?: string; calls?: string[]; extra?: object[]; toolText?: string; isBranchGone?: boolean; detail?: object; state?: string; release?: { status: string }; larkTimeouts?: { left: number }; ghDown?: { isOn: boolean }; store?: Map<string, unknown>; archivedText?: string; sessionRoot?: string; transcript?: string }
 
 /** Two Codeup checkouts (/w/demo-api is the cwd, /w/billing-svc), lark-cli answering titles, a tool bottom echoing `toolText`. */
-function world(on: On, { cwd = '/w/demo-api/src', branch = 'feat', calls = [], extra = [], toolText = '', isBranchGone = false, detail = DETAIL, state = 'TO_BE_MERGED', release = { status: 'RUNNING' }, larkTimeouts = { left: 0 }, ghDown = { isOn: false }, store = new Map<string, unknown>(), archivedText = '', sessionRoot = '' }: World = {}) {
+function world(on: On, { cwd = '/w/demo-api/src', branch = 'feat', calls = [], extra = [], toolText = '', isBranchGone = false, detail = DETAIL, state = 'TO_BE_MERGED', release = { status: 'RUNNING' }, larkTimeouts = { left: 0 }, ghDown = { isOn: false }, store = new Map<string, unknown>(), archivedText = '', sessionRoot = '', transcript = '' }: World = {}) {
   mock.env(on, { ALIBABA_CLOUD_YUNXIAO_ACCESS_TOKEN: 'pt-test', HOME: '/home/me' })
   const clock = mock.clock(on, { now: Date.parse('2026-10-15T10:00:00Z') })
   on('ui.log', async (_$, e) => {
@@ -78,7 +78,7 @@ function world(on: On, { cwd = '/w/demo-api/src', branch = 'feat', calls = [], e
     }
     if (e.argv[0] === '/bin/sh') {
       const isRootLookup = String(e.argv[2]).includes('/projects/')
-      const out = isRootLookup ? (sessionRoot ? `"uuid":"${sessionRoot}"\n` : '') : archivedText
+      const out = e.argv.length > 6 ? transcript : isRootLookup ? (sessionRoot ? `"uuid":"${sessionRoot}"\n` : '') : archivedText
       return { value: { exitCode: 0, stdout: out, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     }
     if (String(e.argv[0]).endsWith('gh')) {
@@ -525,6 +525,22 @@ test('a fork (rewind / edit in the desktop app, new session id) takes over the s
   // Taken over: the parent's snapshot goes, an unrelated session's stays.
   expect(store.has('session:parent-1')).toBe(false)
   expect(store.has('session:other-2')).toBe(true)
+})
+
+test('a doc this session made but lost the mark of (restart, fork) is marked 创建 again from the transcript', async ($, on) => {
+  const doc = { token: 'NewDoc1234567890abcd', url: MADE, kind: 'docx', origin: 'mentioned', at: 0, title: '新建的设计文档', isLookedUp: true }
+  const store = new Map<string, unknown>([[`session:${SESSION_ID}`, { savedAt: Date.parse('2026-10-15T09:00:00Z'), state: { docs: [doc] } }]])
+  const transcript = [
+    JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'lark-cli docs +create --content x' } }] } }),
+    JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: `ok ${MADE}` }] } }),
+  ].join('\n')
+  const clock = world(on, { store, transcript })
+  await $.session.start(START)
+  await clock.advance(1)
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...BAND })
+  expect(await ui.find({ type: 'Text', text: '创建' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '提及' })).toBeUndefined()
+  await ui.unmount()
 })
 
 test('deploy off: a deploy.sh run is not tracked', { options: { deploy: false, mr: false } }, async ($, on) => {

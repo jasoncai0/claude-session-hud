@@ -65,3 +65,9 @@ test('lineageOf folds the session\'s own snapshot with its forks\' by root, newe
   expect(lineageOf(entries, 'session:me', undefined)?.keys).toEqual(['session:me'])
   expect(lineageOf(entries, 'session:none', undefined)).toBe(null)
 })
+
+test('mergeSaved keeps a doc 创建 when the older side made it and the newer only mentioned it', () => {
+  const d = (origin: 'created' | 'mentioned') => ({ token: 't', url: 'u', kind: 'docx', origin, at: 0 })
+  expect(mergeSaved({ ...EMPTY, docs: [d('mentioned')] }, { ...EMPTY, docs: [d('created')] }).docs.map(x => x.origin)).toEqual(['created'])
+  expect(mergeSaved({ ...EMPTY, docs: [d('mentioned')] }, { ...EMPTY, docs: [d('mentioned')] }).docs.map(x => x.origin)).toEqual(['mentioned'])
+})

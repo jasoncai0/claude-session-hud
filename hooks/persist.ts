@@ -73,7 +73,9 @@ export function mergeSaved(newer: Saved, older: Saved): Saved {
     mrDirs: [...older.mrDirs.filter(d => !newer.mrDirs.includes(d)), ...newer.mrDirs].slice(-LIST_MAX),
     mrPinned: unionBy(newer.mrPinned, older.mrPinned, p => `${p.forge ?? ''}:${p.repoPath}!${p.localId}`),
     mrDismissed: unionBy(newer.mrDismissed, older.mrDismissed, same),
-    docs: unionBy(newer.docs, older.docs, d => d.token),
+    // A doc either side made stays made: a fork that met it again only mentioned it.
+    docs: unionBy(newer.docs, older.docs, d => d.token).map(d =>
+      d.origin === 'mentioned' && older.docs.some(o => o.token === d.token && o.origin === 'created') ? { ...d, origin: 'created' as const } : d),
     docsDismissed: unionBy(newer.docsDismissed, older.docsDismissed, same),
     deploys: unionBy(newer.deploys, older.deploys, r => r.key).slice(0, LIST_MAX),
     deployDismissed: unionBy(newer.deployDismissed, older.deployDismissed, same),
