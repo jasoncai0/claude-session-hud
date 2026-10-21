@@ -9,6 +9,7 @@ const BAND = {
 } as const
 const turn = (answer = ''): TurnCompleteInput => ({ reason: 'answer', answer, durationMs: 1, isAborted: false, turnId: 't1' })
 const ORG = 'my-org-id'
+const SESSION_ID = 'sess-0001'
 const START = { cwd: '/w/demo-api/src', surface: null, isInteractive: true } as const
 const LONG_BRANCH = 'feature/user-profile-share-permission'
 const DOC = 'https://acme.feishu.cn/docx/Doc0123456789abcdefABCD'
@@ -44,10 +45,10 @@ const releaseRun = (status: string) => ({
   },
 })
 
-type World = { cwd?: string; branch?: string; calls?: string[]; extra?: object[]; toolText?: string; isBranchGone?: boolean; detail?: object; state?: string; release?: { status: string }; larkTimeouts?: { left: number }; ghDown?: { isOn: boolean } }
+type World = { cwd?: string; branch?: string; calls?: string[]; extra?: object[]; toolText?: string; isBranchGone?: boolean; detail?: object; state?: string; release?: { status: string }; larkTimeouts?: { left: number }; ghDown?: { isOn: boolean }; store?: Map<string, unknown> }
 
 /** Two Codeup checkouts (/w/demo-api is the cwd, /w/billing-svc), lark-cli answering titles, a tool bottom echoing `toolText`. */
-function world(on: On, { cwd = '/w/demo-api/src', branch = 'feat', calls = [], extra = [], toolText = '', isBranchGone = false, detail = DETAIL, state = 'TO_BE_MERGED', release = { status: 'RUNNING' }, larkTimeouts = { left: 0 }, ghDown = { isOn: false } }: World = {}) {
+function world(on: On, { cwd = '/w/demo-api/src', branch = 'feat', calls = [], extra = [], toolText = '', isBranchGone = false, detail = DETAIL, state = 'TO_BE_MERGED', release = { status: 'RUNNING' }, larkTimeouts = { left: 0 }, ghDown = { isOn: false }, store = new Map<string, unknown>() }: World = {}) {
   mock.env(on, { ALIBABA_CLOUD_YUNXIAO_ACCESS_TOKEN: 'pt-test', HOME: '/home/me' })
   const clock = mock.clock(on, { now: Date.parse('2026-10-15T10:00:00Z') })
   on('ui.log', async (_$, e) => {
@@ -58,6 +59,12 @@ function world(on: On, { cwd = '/w/demo-api/src', branch = 'feat', calls = [], e
   on('command.register', async () => ({ value: undefined }) as never)
   on('prompt.submit', async (_$, e) => ({ text: e.text }) as never)
   on('session.cwd', async () => ({ value: cwd }))
+  on('session.id', async () => ({ value: SESSION_ID }) as never)
+  // The plugin's own store, as a map the test reads: JSON in, JSON out, as the engine keeps it.
+  on('store.get', async (_$, e) => ({ value: store.has(e.key) ? JSON.parse(JSON.stringify(store.get(e.key))) : undefined }) as never)
+  on('store.set', async (_$, e) => (store.set(e.key, JSON.parse(JSON.stringify(e.value))), { value: undefined }) as never)
+  on('store.delete', async (_$, e) => (store.delete(e.key), { value: undefined }) as never)
+  on('store.keys', async () => ({ value: [...store.keys()] }) as never)
   on('session.usage', async () => ({ value: { rateLimits: [{ kind: 'five_hour', percentUsed: 42, resetsAt: '2999-01-01T00:00:00Z' }] } }) as never)
   on('process.run', async (_$, e) => {
     if (String(e.argv[0]).endsWith('lark-cli')) {
@@ -436,6 +443,37 @@ test('a release row\'s 检查 folds again on a second press, as an MR row does',
   // The 收起 at the end of the unfolded list folds it too: in reach when a tall band has scrolled the row away.
   await ui.press({ key: `deploy-fold-demo-api/${ST}` })
   expect(await ui.find({ type: 'Text', text: '✓ 镜像构建' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('a session saves what it tracked; a fresh process resuming it shows the release and doc again', async ($, on) => {
+  const store = new Map<string, unknown>()
+  const clock = world(on, { toolText: DEPLOY_OUT, store, release: { status: 'SUCCESS' } })
+  await $.session.start(START)
+  await bash($, DEPLOY_CMD)
+  await $.prompt.submit({ text: `看下 [权限设计](${DOC})` } as never)
+  await clock.advance(5_000)
+  await $.turn.complete(turn())
+  const saved = store.get(`session:${SESSION_ID}`) as { state: { deploys: { app: string }[]; docs: { url: string }[] } } | undefined
+  expect(saved?.state.deploys.map(d => d.app)).toEqual(['demo-api'])
+  expect(saved?.state.docs.map(d => d.url)).toEqual([DOC])
+})
+
+test('a fresh process resuming a session puts its saved releases, docs and pins back before refreshing', async ($, on) => {
+  const deploy = { key: `demo-api/${ST}`, app: 'demo-api', workflowSn: WF, stageSn: ST, url: STAGE_URL, env: 'prod', triggeredAt: 0, number: '194', status: 'SUCCESS', stages: [] }
+  const doc = { token: 'Doc0123456789abcdefABCD', url: DOC, kind: 'docx', origin: 'created', at: 0, title: '权限设计', isLookedUp: true }
+  const store = new Map<string, unknown>([
+    [`session:${SESSION_ID}`, { savedAt: Date.parse('2026-10-15T09:00:00Z'), state: { deploys: [deploy], docs: [doc], mrPinned: [{ repoPath: 'acme/gh-app', localId: 8, forge: 'github' }] } }],
+    ['session:old', { savedAt: 0, state: { mrDirs: ['/w/x'] } }],
+  ])
+  world(on, { store })
+  await $.session.start(START)
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...BAND })
+  expect((await ui.find({ type: 'Link', text: 'demo-api' }))?.props.href).toBe(STAGE_URL)
+  expect((await ui.find({ type: 'Link', text: '权限设计' }))?.props.href).toBe(DOC)
+  expect(await ui.find({ type: 'Link', text: '#8' })).toBeDefined()
+  // A month-old snapshot is dropped as the session starts.
+  expect(store.has('session:old')).toBe(false)
   await ui.unmount()
 })
 

@@ -18,6 +18,8 @@ import { compareRange, findPrLinks, parseGithubRemote, pickPrs, prQuery, prView,
 import type { ApiPr, GhRepo } from './mr/github'
 import { dirsOf, keepLastMrs, mrList, rememberDirs } from './mr/session'
 import { mrLayout, mrSection } from './mr/view'
+import { SNAPSHOT_PREFIX, isEmpty, snapshotOf, staleKeys } from './persist'
+import type { Saved } from './persist'
 import { LIST_MAX, MODULE_IDS, PLUGIN, settingsOf } from './settings'
 import type { Settings } from './settings'
 import { isBlank } from './tree'
@@ -562,6 +564,71 @@ async function runHud($: EngineInterface, args: string, settings: Settings): Pro
   return deny ? `未能修改 ${cmd.key}：${deny}` : `已设置 ${cmd.key} = ${String(cmd.value)}`
 }
 
+// ── persistence ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+/** How often the session's snapshot is compared and, when it changed, written. */
+const SAVE_EVERY_MS = 30_000
+/** The last snapshot written, so an unchanged one is not written again. */
+let lastSaved = ''
+
+async function savedOf($: EngineInterface): Promise<Saved> {
+  return {
+    mrDirs: listOf<string>(await read($, mrDirs)),
+    mrPinned: listOf<MrPin>(await read($, mrPinned)),
+    mrDismissed: listOf<string>(await read($, mrDismissed)),
+    docs: listOf<DocLink>(await read($, docs)),
+    docsDismissed: listOf<string>(await read($, docsDismissed)),
+    deploys: listOf<DeployRun>(await read($, deploys)),
+    deployDismissed: listOf<string>(await read($, deployDismissed)),
+    collapsed: (await read($, collapsed)) ?? null,
+  }
+}
+
+/** Drops snapshots past the newest kept or a month old; `isFull` keeps fewer, to make room. */
+async function pruneStore($: EngineInterface, isFull = false) {
+  const keys = (await $.store.keys()).filter(k => k.startsWith(SNAPSHOT_PREFIX))
+  const saved = await Promise.all(keys.map(async key => ({ key, savedAt: snapshotOf(await $.store.get(key))?.savedAt ?? 0 })))
+  for (const key of staleKeys(saved, await $.clock.now(), isFull)) await $.store.delete(key)
+}
+
+/** Writes the session's snapshot when it changed since the last write; a full store is pruned harder once. */
+async function saveSession($: EngineInterface) {
+  const state = await savedOf($)
+  const text = JSON.stringify(state)
+  if (text === lastSaved || (isEmpty(state) && !lastSaved)) return
+  const key = `${SNAPSHOT_PREFIX}${await $.session.id()}`
+  const snapshot = { savedAt: await $.clock.now(), state }
+  await $.store.set(key, snapshot).catch(async () => {
+    await pruneStore($, true)
+    await $.store.set(key, snapshot)
+  })
+  lastSaved = text
+}
+
+/**
+ * Puts the session's snapshot back when the host holds nothing for it: a fresh process resuming the session. A hot
+ * reload finds the host's values and keeps them.
+ */
+async function restoreSession($: EngineInterface) {
+  const now = await savedOf($)
+  if (!isEmpty(now)) {
+    lastSaved = JSON.stringify(now)
+    return
+  }
+  const snap = snapshotOf(await $.store.get(`${SNAPSHOT_PREFIX}${await $.session.id()}`))
+  if (!snap) return
+  const s = snap.state
+  await update($, mrDirs, () => s.mrDirs)
+  await update($, mrPinned, () => s.mrPinned)
+  await update($, mrDismissed, () => s.mrDismissed)
+  await update($, docs, () => s.docs)
+  await update($, docsDismissed, () => s.docsDismissed)
+  await update($, deploys, () => s.deploys)
+  await update($, deployDismissed, () => s.deployDismissed)
+  await update($, collapsed, () => s.collapsed)
+  lastSaved = JSON.stringify(s)
+}
+
 // ── wiring ──────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 export const register: Register = (on, options) => {
@@ -570,6 +637,12 @@ export const register: Register = (on, options) => {
 
   on('session.start', async ($, e, next) => {
     const result = await next(e)
+    // Before any refresh: the pins, dirs and runs it reads may come back from the store.
+    if (isAnyOn) {
+      await guard($, 'persist', () => restoreSession($))
+      void guard($, 'persist', () => pruneStore($))
+      $.clock.every(SAVE_EVERY_MS, () => void guard($, 'persist', () => saveSession($)))
+    }
     await $.command.register({ name: 'hud', description: 'session-hud：查看 / 启停模块、折叠、修改配置', argumentHint: '[usage|mr|docs|deploy on|off | fold | unfold | set <key> <value>]' })
     if (settings.mr) await $.command.register({ name: 'mr', description: '列出本会话涉及仓库的 Codeup MR 及链接' })
     if (settings.docs) await $.command.register({ name: 'docs', description: '列出本会话创建或提到的飞书文档及链接' })
@@ -632,7 +705,13 @@ export const register: Register = (on, options) => {
     ])
     // Title lookups run lark-cli (seconds each): off the turn's path, on a timer.
     if (settings.docs) $.clock.after(0, () => void guard($, 'docs', () => lookupTitles($)))
+    if (isAnyOn) await guard($, 'persist', () => saveSession($))
     return result
+  })
+
+  on('session.end', async ($, e, next) => {
+    if (isAnyOn) await guard($, 'persist', () => saveSession($))
+    return next(e)
   })
 
   on('command.run', { command: 'hud' }, async ($, e) => ({ text: await runHud($, e.args, settings) }))
