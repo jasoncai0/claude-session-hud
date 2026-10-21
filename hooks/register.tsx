@@ -18,7 +18,7 @@ import { compareRange, findPrLinks, parseGithubRemote, pickPrs, prQuery, prView,
 import type { ApiPr, GhRepo } from './mr/github'
 import { dirsOf, keepLastMrs, mrList, rememberDirs } from './mr/session'
 import { mrLayout, mrSection } from './mr/view'
-import { SNAPSHOT_PREFIX, archivedIdsOf, isEmpty, snapshotOf, staleKeys } from './persist'
+import { SNAPSHOT_PREFIX, archivedIdsOf, isEmpty, lineageOf, snapshotOf, staleKeys } from './persist'
 import type { Saved } from './persist'
 import { LIST_MAX, MODULE_IDS, PLUGIN, settingsOf } from './settings'
 import type { Settings } from './settings'
@@ -573,6 +573,27 @@ async function runHud($: EngineInterface, args: string, settings: Settings): Pro
 const SAVE_EVERY_MS = 30_000
 /** The last snapshot written, so an unchanged one is not written again. */
 let lastSaved = ''
+/** Snapshots of the same lineage folded into this session's on restore: dropped once this one is written. */
+let foldedKeys: string[] = []
+/** The session's root (its first transcript row's uuid), per session id: a /clear goes on under another. */
+let rootCache: { id: string; root: string } | null = null
+/** Finds the session's transcript and prints its first row's uuid; nothing before the first row is written. */
+const ROOT_SCRIPT = `f=$(ls "$1"/projects/*/"$2".jsonl 2>/dev/null | head -n 1); [ -n "$f" ] && grep -m 1 -o '"uuid":"[0-9a-f-]*"' "$f"; exit 0`
+const ROOT_TIMEOUT_MS = 5_000
+
+/** The uuid of session `id`'s first transcript row: shared by every fork of it (a rewind or an edit in the desktop app). */
+async function readRoot($: EngineInterface, id: string): Promise<string | undefined> {
+  const dir = (await $.env.get('CLAUDE_CONFIG_DIR')) || `${(await $.env.get('HOME')) ?? ''}/.claude`
+  const run = await $.process.run(['/bin/sh', '-c', ROOT_SCRIPT, 'sh', dir, id], { timeoutMs: ROOT_TIMEOUT_MS })
+  return run.stdout.match(/"uuid":"([0-9a-f-]+)"/)?.[1]
+}
+
+async function rootOf($: EngineInterface, id: string): Promise<string | undefined> {
+  if (rootCache?.id === id) return rootCache.root
+  const root = await readRoot($, id)
+  if (root) rootCache = { id, root }
+  return root
+}
 
 async function savedOf($: EngineInterface): Promise<Saved> {
   return {
@@ -619,18 +640,24 @@ async function saveSession($: EngineInterface) {
   const state = await savedOf($)
   const text = JSON.stringify(state)
   if (text === lastSaved || (isEmpty(state) && !lastSaved)) return
-  const key = `${SNAPSHOT_PREFIX}${await $.session.id()}`
-  const snapshot = { savedAt: await $.clock.now(), state }
+  const id = await $.session.id()
+  const key = `${SNAPSHOT_PREFIX}${id}`
+  const root = await rootOf($, id).catch(() => undefined)
+  const snapshot = { savedAt: await $.clock.now(), ...(root ? { root } : {}), state }
   await $.store.set(key, snapshot).catch(async () => {
     await pruneStore($, true)
     await $.store.set(key, snapshot)
   })
   lastSaved = text
+  // What this session took over from the session it forked from now lives under its own key.
+  for (const old of foldedKeys.filter(k => k !== key)) await $.store.delete(old)
+  foldedKeys = []
 }
 
 /**
  * Puts the session's snapshot back when the host holds nothing for it: a fresh process resuming the session. A hot
- * reload finds the host's values and keeps them.
+ * reload finds the host's values and keeps them. A fork (a rewind or an edit in the desktop app goes on under a new
+ * session id) finds the snapshots of the session it came from by their shared root, and takes them over.
  */
 async function restoreSession($: EngineInterface) {
   const now = await savedOf($)
@@ -638,9 +665,20 @@ async function restoreSession($: EngineInterface) {
     lastSaved = JSON.stringify(now)
     return
   }
-  const snap = snapshotOf(await $.store.get(`${SNAPSHOT_PREFIX}${await $.session.id()}`))
-  if (!snap) return
-  const s = snap.state
+  const id = await $.session.id()
+  const ownKey = `${SNAPSHOT_PREFIX}${id}`
+  const root = await rootOf($, id).catch(() => undefined)
+  const keys = (await $.store.keys()).filter(k => k.startsWith(SNAPSHOT_PREFIX))
+  // A snapshot written before roots were recorded has its root read from its own transcript.
+  const entries = (await Promise.all(keys.map(async key => {
+    const snap = snapshotOf(await $.store.get(key))
+    if (!snap || snap.root || !root) return snap ? [{ key, snap }] : []
+    const its = await readRoot($, key.slice(SNAPSHOT_PREFIX.length)).catch(() => undefined)
+    return [{ key, snap: its ? { ...snap, root: its } : snap }]
+  }))).flat()
+  const lineage = lineageOf(entries, ownKey, root)
+  if (!lineage) return
+  const s = lineage.state
   await update($, mrDirs, () => s.mrDirs)
   await update($, mrPinned, () => s.mrPinned)
   await update($, mrDismissed, () => s.mrDismissed)
@@ -649,7 +687,10 @@ async function restoreSession($: EngineInterface) {
   await update($, deploys, () => s.deploys)
   await update($, deployDismissed, () => s.deployDismissed)
   await update($, collapsed, () => s.collapsed)
-  lastSaved = JSON.stringify(s)
+  // Taken over from another session: written under this one's key at the next save, which drops the others.
+  const isOwnOnly = lineage.keys.length === 1 && lineage.keys[0] === ownKey
+  lastSaved = isOwnOnly ? JSON.stringify(s) : ''
+  foldedKeys = isOwnOnly ? [] : lineage.keys
 }
 
 // ── wiring ──────────────────────────────────────────────────────────────────────────────────────────────────────────

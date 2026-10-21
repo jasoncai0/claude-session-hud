@@ -1,4 +1,5 @@
 import type { DeployRun, DocLink } from '../types'
+import { LIST_MAX } from './settings'
 
 /**
  * What a session's band is made of and cannot be fetched again: the repos it touched, the MRs / docs / releases it
@@ -17,7 +18,12 @@ export type Saved = {
   collapsed: boolean | null
 }
 
-export type Snapshot = { savedAt: number; state: Saved }
+/**
+ * `root` is the uuid of the session's first transcript row. A rewind or an edit in the desktop app goes on as a fork,
+ * under a new session id, whose transcript keeps the rows (and their uuids) it forked from: the same root finds the
+ * snapshots of the session it came from.
+ */
+export type Snapshot = { savedAt: number; root?: string; state: Saved }
 
 export const SNAPSHOT_PREFIX = 'session:'
 /** Sessions kept in the store, newest first; the store's whole file is capped at 4 MiB. */
@@ -41,6 +47,7 @@ export function snapshotOf(value: unknown): Snapshot | null {
   const s = value.state
   return {
     savedAt: value.savedAt,
+    ...(typeof value.root === 'string' ? { root: value.root } : {}),
     state: {
       mrDirs: strings(s.mrDirs),
       mrPinned: Array.isArray(s.mrPinned) ? (s.mrPinned.filter(p => isObject(p) && typeof p.repoPath === 'string' && typeof p.localId === 'number') as Saved['mrPinned']) : [],
@@ -52,6 +59,34 @@ export function snapshotOf(value: unknown): Snapshot | null {
       collapsed: typeof s.collapsed === 'boolean' ? s.collapsed : null,
     },
   }
+}
+
+const unionBy = <T,>(first: readonly T[], second: readonly T[], key: (x: T) => string): T[] => {
+  const seen = new Set(first.map(key))
+  return [...first, ...second.filter(x => !seen.has(key(x)))]
+}
+
+/** `newer` with what only `older` holds added after it: each list by its key, the fold the newer one's when it has one. */
+export function mergeSaved(newer: Saved, older: Saved): Saved {
+  const same = (x: string) => x
+  return {
+    mrDirs: [...older.mrDirs.filter(d => !newer.mrDirs.includes(d)), ...newer.mrDirs].slice(-LIST_MAX),
+    mrPinned: unionBy(newer.mrPinned, older.mrPinned, p => `${p.forge ?? ''}:${p.repoPath}!${p.localId}`),
+    mrDismissed: unionBy(newer.mrDismissed, older.mrDismissed, same),
+    docs: unionBy(newer.docs, older.docs, d => d.token),
+    docsDismissed: unionBy(newer.docsDismissed, older.docsDismissed, same),
+    deploys: unionBy(newer.deploys, older.deploys, r => r.key).slice(0, LIST_MAX),
+    deployDismissed: unionBy(newer.deployDismissed, older.deployDismissed, same),
+    collapsed: newer.collapsed ?? older.collapsed,
+  }
+}
+
+/** The snapshots of one lineage (same `root`, or the session's own key), newest first, folded into one. */
+export function lineageOf(entries: readonly { key: string; snap: Snapshot }[], ownKey: string, root: string | undefined): { state: Saved; keys: string[] } | null {
+  const mine = entries.filter(e => e.key === ownKey || (root !== undefined && e.snap.root === root)).sort((a, b) => b.snap.savedAt - a.snap.savedAt)
+  const [first, ...rest] = mine
+  if (!first) return null
+  return { state: rest.reduce((acc, e) => mergeSaved(acc, e.snap.state), first.snap.state), keys: mine.map(e => e.key) }
 }
 
 const CLI_SESSION_RE = /"cliSessionId"\s*:\s*"([\w-]+)"/g

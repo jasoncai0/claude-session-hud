@@ -45,10 +45,10 @@ const releaseRun = (status: string) => ({
   },
 })
 
-type World = { cwd?: string; branch?: string; calls?: string[]; extra?: object[]; toolText?: string; isBranchGone?: boolean; detail?: object; state?: string; release?: { status: string }; larkTimeouts?: { left: number }; ghDown?: { isOn: boolean }; store?: Map<string, unknown>; archivedText?: string }
+type World = { cwd?: string; branch?: string; calls?: string[]; extra?: object[]; toolText?: string; isBranchGone?: boolean; detail?: object; state?: string; release?: { status: string }; larkTimeouts?: { left: number }; ghDown?: { isOn: boolean }; store?: Map<string, unknown>; archivedText?: string; sessionRoot?: string }
 
 /** Two Codeup checkouts (/w/demo-api is the cwd, /w/billing-svc), lark-cli answering titles, a tool bottom echoing `toolText`. */
-function world(on: On, { cwd = '/w/demo-api/src', branch = 'feat', calls = [], extra = [], toolText = '', isBranchGone = false, detail = DETAIL, state = 'TO_BE_MERGED', release = { status: 'RUNNING' }, larkTimeouts = { left: 0 }, ghDown = { isOn: false }, store = new Map<string, unknown>(), archivedText = '' }: World = {}) {
+function world(on: On, { cwd = '/w/demo-api/src', branch = 'feat', calls = [], extra = [], toolText = '', isBranchGone = false, detail = DETAIL, state = 'TO_BE_MERGED', release = { status: 'RUNNING' }, larkTimeouts = { left: 0 }, ghDown = { isOn: false }, store = new Map<string, unknown>(), archivedText = '', sessionRoot = '' }: World = {}) {
   mock.env(on, { ALIBABA_CLOUD_YUNXIAO_ACCESS_TOKEN: 'pt-test', HOME: '/home/me' })
   const clock = mock.clock(on, { now: Date.parse('2026-10-15T10:00:00Z') })
   on('ui.log', async (_$, e) => {
@@ -76,7 +76,11 @@ function world(on: On, { cwd = '/w/demo-api/src', branch = 'feat', calls = [], e
       const title = String(e.argv[4]).includes('NewDoc') ? '新建的设计文档' : '权限设计（正式标题）'
       return { value: { exitCode: 0, stdout: JSON.stringify({ ok: true, data: { title } }), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     }
-    if (e.argv[0] === '/bin/sh') return { value: { exitCode: 0, stdout: archivedText, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    if (e.argv[0] === '/bin/sh') {
+      const isRootLookup = String(e.argv[2]).includes('/projects/')
+      const out = isRootLookup ? (sessionRoot ? `"uuid":"${sessionRoot}"\n` : '') : archivedText
+      return { value: { exitCode: 0, stdout: out, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    }
     if (String(e.argv[0]).endsWith('gh')) {
       calls.push(`gh ${e.argv.slice(1, 3).join(' ')}`)
       if (ghDown.isOn) return { value: { exitCode: 1, stdout: '', stderr: 'Post "https://api.github.com/graphql": net/http: TLS handshake timeout', isStdoutTruncated: false, isStderrTruncated: false } }
@@ -500,6 +504,27 @@ test('usageContext off: no context meter', { options: { usageContext: false } },
   expect(await ui.find({ type: 'Text', text: '上下文' })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: '5h' })).toBeDefined()
   await ui.unmount()
+})
+
+test('a fork (rewind / edit in the desktop app, new session id) takes over the snapshot of the session it came from', async ($, on) => {
+  const deploy = { key: `demo-api/${ST}`, app: 'demo-api', workflowSn: WF, stageSn: ST, url: STAGE_URL, env: 'prod', triggeredAt: 0, number: '194', status: 'SUCCESS', stages: [] }
+  const store = new Map<string, unknown>([
+    // Written before roots were recorded: its root is read from its transcript, the same one the fork's shows.
+    ['session:parent-1', { savedAt: Date.parse('2026-10-15T09:00:00Z'), state: { deploys: [deploy], mrDirs: ['/w/demo-api'] } }],
+    ['session:other-2', { savedAt: Date.parse('2026-10-15T09:30:00Z'), root: '99999999-0000-4000-8000-000000000009', state: { mrDirs: ['/w/billing-svc'] } }],
+  ])
+  world(on, { store, sessionRoot: '53452407-e10b-45b1-9a3b-663c2fdbb206' })
+  await $.session.start(START)
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...BAND })
+  expect((await ui.find({ type: 'Link', text: 'demo-api' }))?.props.href).toBe(STAGE_URL)
+  await ui.unmount()
+  await $.turn.complete(turn())
+  const saved = store.get(`session:${SESSION_ID}`) as { root?: string; state: { deploys: { app: string }[] } } | undefined
+  expect(saved?.root).toBe('53452407-e10b-45b1-9a3b-663c2fdbb206')
+  expect(saved?.state.deploys.map(d => d.app)).toEqual(['demo-api'])
+  // Taken over: the parent's snapshot goes, an unrelated session's stays.
+  expect(store.has('session:parent-1')).toBe(false)
+  expect(store.has('session:other-2')).toBe(true)
 })
 
 test('deploy off: a deploy.sh run is not tracked', { options: { deploy: false, mr: false } }, async ($, on) => {

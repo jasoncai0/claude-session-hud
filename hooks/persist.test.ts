@@ -1,6 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
-import { archivedIdsOf, isEmpty, snapshotOf, staleKeys } from './persist'
+import { archivedIdsOf, isEmpty, lineageOf, mergeSaved, snapshotOf, staleKeys } from './persist'
+import type { Saved } from './persist'
 
 const DAY = 24 * 60 * 60_000
 
@@ -37,4 +38,30 @@ test('an archived session\'s snapshot is dropped, however new', () => {
   expect([...archived]).toEqual(['aaa-1', 'bbb-2'])
   const saved = [{ key: 'session:aaa-1', savedAt: 10 }, { key: 'session:ccc-3', savedAt: 9 }]
   expect(staleKeys(saved, 10, false, archived)).toEqual(['session:aaa-1'])
+})
+
+const EMPTY: Saved = { mrDirs: [], mrPinned: [], mrDismissed: [], docs: [], docsDismissed: [], deploys: [], deployDismissed: [], collapsed: null }
+const run = (key: string) => ({ key, app: key, workflowSn: '', stageSn: '', url: '', triggeredAt: 0 })
+
+test('mergeSaved keeps the newer entries first and adds what only the older holds', () => {
+  const newer: Saved = { ...EMPTY, mrDirs: ['/b'], deploys: [run('x')], collapsed: null }
+  const older: Saved = { ...EMPTY, mrDirs: ['/a', '/b'], deploys: [run('y'), run('x')], mrPinned: [{ repoPath: 'o/r', localId: 1 }], collapsed: true }
+  const m = mergeSaved(newer, older)
+  expect(m.mrDirs).toEqual(['/a', '/b'])
+  expect(m.deploys.map(r => r.key)).toEqual(['x', 'y'])
+  expect(m.mrPinned).toHaveLength(1)
+  expect(m.collapsed).toBe(true)
+})
+
+test('lineageOf folds the session\'s own snapshot with its forks\' by root, newest first; null with none', () => {
+  const snap = (savedAt: number, root: string | undefined, dirs: string[]) => ({ savedAt, ...(root ? { root } : {}), state: { ...EMPTY, mrDirs: dirs } })
+  const entries = [
+    { key: 'session:old', snap: snap(1, 'r1', ['/old']) },
+    { key: 'session:me', snap: snap(5, 'r1', ['/me']) },
+    { key: 'session:x', snap: snap(9, 'r2', ['/x']) },
+  ]
+  expect(lineageOf(entries, 'session:me', 'r1')).toEqual({ state: { ...EMPTY, mrDirs: ['/old', '/me'] }, keys: ['session:me', 'session:old'] })
+  expect(lineageOf(entries, 'session:new', 'r1')?.keys).toEqual(['session:me', 'session:old'])
+  expect(lineageOf(entries, 'session:me', undefined)?.keys).toEqual(['session:me'])
+  expect(lineageOf(entries, 'session:none', undefined)).toBe(null)
 })
