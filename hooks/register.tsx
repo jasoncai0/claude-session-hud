@@ -588,6 +588,43 @@ async function runHud($: EngineInterface, args: string, settings: Settings): Pro
   return deny ? `未能修改 ${cmd.key}：${deny}` : `已设置 ${cmd.key} = ${String(cmd.value)}`
 }
 
+// ── commands ────────────────────────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Registers `/<name>`, or `/session-<name>` (or `fallback`) when the name is taken (Claude Code's own /docs, another
+ * plugin's /hud skill). Logged only when neither could be had.
+ */
+async function registerCommand($: EngineInterface, name: string, spec: { description: string; argumentHint?: string }, fallback = `session-${name}`) {
+  for (const candidate of [name, fallback]) {
+    const isRegistered = await $.command.register({ name: candidate, ...spec }).then(() => true, () => false)
+    if (isRegistered) return
+  }
+  $.ui.log(`${PLUGIN}: /${name} 与 /${fallback} 都已被占用，命令未注册（HUD 显示不受影响）`)
+}
+
+async function runMr($: EngineInterface, args: string, settings: Settings): Promise<string> {
+  if (!settings.mr) return 'MR / PR 模块已关闭：/hud mr on'
+  // `/mr <link>`: track an MR / PR this session did not open (one linked while investigating is not shown by itself).
+  const asked = [...findMrLinks(args), ...findPrLinks(args)].map(p => ({ ...p, via: 'tracked' as const }))
+  if (asked.length) await pinMrs($, settings, asked)
+  await refreshMrs($, settings)
+  const v = await read($, mrView)
+  return v?.error ?? mrList(v?.repos ?? [], state => stateOf(state).label)
+}
+
+async function runDeploys($: EngineInterface, args: string, settings: Settings): Promise<string> {
+  if (!settings.deploy) return '云效发布模块已关闭：/hud deploy on'
+  // `/deploys <stage link>…` tracks those stages; bare `/deploys` refreshes and lists.
+  if (!(await trackDeploys($, args, settings))) await refreshDeploys($, settings)
+  return deployList(listOf<DeployRun>(await read($, deploys)))
+}
+
+async function runDocs($: EngineInterface, settings: Settings): Promise<string> {
+  if (!settings.docs) return '飞书文档模块已关闭：/hud docs on'
+  await guard($, 'docs', () => lookupTitles($))
+  return docList(listOf<DocLink>(await read($, docs)))
+}
+
 // ── persistence ─────────────────────────────────────────────────────────────────────────────────────────────────
 
 /** How often the session's snapshot is compared and, when it changed, written. */
@@ -729,12 +766,13 @@ export const register: Register = (on, options) => {
       void guard($, 'persist', () => pruneStore($))
       $.clock.every(SAVE_EVERY_MS, () => void guard($, 'persist', () => saveSession($)))
     }
-    // Each on its own: a name a newer Claude Code takes for itself is refused, and that must not stop the rest of the start.
-    await guard($, 'command', () => $.command.register({ name: 'hud', description: 'session-hud：查看 / 启停模块、折叠、修改配置', argumentHint: '[usage|mr|docs|deploy on|off | fold | unfold | set <key> <value>]' }))
-    if (settings.mr) await guard($, 'command', () => $.command.register({ name: 'mr', description: '列出本会话的 MR / PR；带 MR / PR 链接则跟踪它', argumentHint: '[MR / PR 链接]' }))
+    // Each on its own, with a `session-` name to fall back to: a name Claude Code or another plugin already has is
+    // refused, and that must neither stop the rest of the start nor print an error every session.
+    await registerCommand($, 'hud', { description: 'session-hud：查看 / 启停模块、折叠、修改配置', argumentHint: '[usage|mr|docs|deploy on|off | fold | unfold | set <key> <value>]' })
+    if (settings.mr) await registerCommand($, 'mr', { description: '列出本会话的 MR / PR；带 MR / PR 链接则跟踪它', argumentHint: '[MR / PR 链接]' })
     // Not `docs`: Claude Code ships a /docs of its own.
-    if (settings.docs) await guard($, 'command', () => $.command.register({ name: 'doclinks', description: '列出本会话创建或提到的飞书文档 / Artifacts 及链接' }))
-    if (settings.deploy) await guard($, 'command', () => $.command.register({ name: 'deploys', description: '列出本会话的云效发布；带 AppStack 阶段链接则跟踪该阶段', argumentHint: '[AppStack 阶段链接]' }))
+    if (settings.docs) await registerCommand($, 'doclinks', { description: '列出本会话创建或提到的飞书文档 / Artifacts 及链接' }, 'session-docs')
+    if (settings.deploy) await registerCommand($, 'deploys', { description: '列出本会话的云效发布；带 AppStack 阶段链接则跟踪该阶段', argumentHint: '[AppStack 阶段链接]' })
     if (settings.usage) await guard($, 'usage', () => refreshUsage($))
     if (settings.mr) {
       void guard($, 'mr', () => refreshMrs($, settings))
@@ -801,28 +839,15 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
+  // Each command answers under its own name and under the `session-` one it falls back to when the name is taken.
   on('command.run', { command: 'hud' }, async ($, e) => ({ text: await runHud($, e.args, settings) }))
-
-  on('command.run', { command: 'mr' }, async ($, e) => {
-    if (!settings.mr) return { text: 'Codeup MR 模块已关闭：/hud mr on' }
-    // `/mr <link>`: track an MR / PR this session did not open (one linked while investigating is not shown by itself).
-    const asked = [...findMrLinks(e.args), ...findPrLinks(e.args)].map(p => ({ ...p, via: 'tracked' as const }))
-    if (asked.length) await pinMrs($, settings, asked)
-    await refreshMrs($, settings)
-    const v = await read($, mrView)
-    return { text: v?.error ?? mrList(v?.repos ?? [], state => stateOf(state).label) }
-  })
-
-  on('command.run', { command: 'deploys' }, async ($, e) => {
-    if (!settings.deploy) return { text: '云效发布模块已关闭：/hud deploy on' }
-    // `/deploys <stage link>…` tracks those stages; bare `/deploys` refreshes and lists.
-    if (!(await trackDeploys($, e.args, settings))) await refreshDeploys($, settings)
-    return { text: deployList(listOf<DeployRun>(await read($, deploys))) }
-  })
-
-  on('command.run', { command: 'doclinks' }, async $ => ({
-    text: settings.docs ? (await guard($, 'docs', () => lookupTitles($)), docList(listOf<DocLink>(await read($, docs)))) : '飞书文档模块已关闭：/hud docs on',
-  }))
+  on('command.run', { command: 'session-hud' }, async ($, e) => ({ text: await runHud($, e.args, settings) }))
+  on('command.run', { command: 'mr' }, async ($, e) => ({ text: await runMr($, e.args, settings) }))
+  on('command.run', { command: 'session-mr' }, async ($, e) => ({ text: await runMr($, e.args, settings) }))
+  on('command.run', { command: 'deploys' }, async ($, e) => ({ text: await runDeploys($, e.args, settings) }))
+  on('command.run', { command: 'session-deploys' }, async ($, e) => ({ text: await runDeploys($, e.args, settings) }))
+  on('command.run', { command: 'doclinks' }, async $ => ({ text: await runDocs($, settings) }))
+  on('command.run', { command: 'session-docs' }, async $ => ({ text: await runDocs($, settings) }))
 
   // The band above the prompt is one site shared by every plugin: draw on top of whatever the plugins beneath drew
   // (next), never instead of it, and step aside entirely while a survey holds it.

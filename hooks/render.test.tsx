@@ -45,10 +45,10 @@ const releaseRun = (status: string) => ({
   },
 })
 
-type World = { cwd?: string; branch?: string; calls?: string[]; extra?: object[]; toolText?: string; isBranchGone?: boolean; detail?: object; state?: string; release?: { status: string }; larkTimeouts?: { left: number }; ghDown?: { isOn: boolean }; store?: Map<string, unknown>; archivedText?: string; sessionRoot?: string; transcript?: string }
+type World = { cwd?: string; branch?: string; calls?: string[]; extra?: object[]; toolText?: string; isBranchGone?: boolean; detail?: object; state?: string; release?: { status: string }; larkTimeouts?: { left: number }; ghDown?: { isOn: boolean }; store?: Map<string, unknown>; archivedText?: string; sessionRoot?: string; transcript?: string; takenCommands?: string[]; commands?: string[] }
 
 /** Two Codeup checkouts (/w/demo-api is the cwd, /w/billing-svc), lark-cli answering titles, a tool bottom echoing `toolText`. */
-function world(on: On, { cwd = '/w/demo-api/src', branch = 'feat', calls = [], extra = [], toolText = '', isBranchGone = false, detail = DETAIL, state = 'TO_BE_MERGED', release = { status: 'RUNNING' }, larkTimeouts = { left: 0 }, ghDown = { isOn: false }, store = new Map<string, unknown>(), archivedText = '', sessionRoot = '', transcript = '' }: World = {}) {
+function world(on: On, { cwd = '/w/demo-api/src', branch = 'feat', calls = [], extra = [], toolText = '', isBranchGone = false, detail = DETAIL, state = 'TO_BE_MERGED', release = { status: 'RUNNING' }, larkTimeouts = { left: 0 }, ghDown = { isOn: false }, store = new Map<string, unknown>(), archivedText = '', sessionRoot = '', transcript = '', takenCommands = [], commands = [] }: World = {}) {
   mock.env(on, { ALIBABA_CLOUD_YUNXIAO_ACCESS_TOKEN: 'pt-test', HOME: '/home/me' })
   const clock = mock.clock(on, { now: Date.parse('2026-10-15T10:00:00Z') })
   on('ui.log', async (_$, e) => {
@@ -56,7 +56,11 @@ function world(on: On, { cwd = '/w/demo-api/src', branch = 'feat', calls = [], e
     return { value: undefined } as never
   })
   on('session.start', async (_$, e) => ({ cwd: e.cwd }))
-  on('command.register', async () => ({ value: undefined }) as never)
+  on('command.register', async (_$, e) => {
+    if (takenCommands.includes(e.name)) throw new Error(`"/${e.name}" refused: it is the plugin's /other:${e.name}`)
+    commands.push(`/${e.name}`)
+    return { value: undefined } as never
+  })
   on('prompt.submit', async (_$, e) => ({ text: e.text }) as never)
   on('session.cwd', async () => ({ value: cwd }))
   on('session.id', async () => ({ value: SESSION_ID }) as never)
@@ -548,6 +552,17 @@ test('a doc this session made but lost the mark of (restart, fork) is marked 创
   expect(await ui.find({ type: 'Text', text: '创建' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: '提及' })).toBeUndefined()
   await ui.unmount()
+})
+
+test('a command name another plugin already has falls back to session-<name>, quietly; both names answer', async ($, on) => {
+  const calls: string[] = []
+  const commands: string[] = []
+  world(on, { calls, commands, takenCommands: ['hud'] })
+  await $.session.start(START)
+  expect(commands).toEqual(['/session-hud', '/mr', '/doclinks', '/deploys'])
+  expect(calls.filter(c => c.startsWith('log'))).toEqual([])
+  const out = await $.command.run({ command: 'session-hud', args: '' } as never) as { text?: string }
+  expect(out.text).toContain('**session-hud**')
 })
 
 test('deploy off: a deploy.sh run is not tracked', { options: { deploy: false, mr: false } }, async ($, on) => {

@@ -8,7 +8,7 @@ import type { Section, Ui } from './ui'
 const MODULE_NAMES: Record<string, string> = { usage: '用量', mr: 'MR / PR', docs: '飞书文档', deploy: '云效发布' }
 
 export const HELP = [
-  '用法：',
+  '用法（`/hud` 与其他插件重名时为 `/session-hud`，其余命令同理：`/session-mr` 等）：',
   '- `/hud` 查看各模块开关与配置',
   '- `/hud usage|mr|docs|deploy on|off` 启停模块（写入插件配置，立即生效）',
   '- `/hud fold` / `/hud unfold` 折叠 / 展开本会话的 HUD（默认值：`/hud set collapsed on|off`）',
