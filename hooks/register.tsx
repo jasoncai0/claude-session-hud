@@ -12,7 +12,7 @@ import { LARK_CLI, inspectArgv, isMissingProgram, lookupOf } from './docs/lookup
 import type { Lookup } from './docs/lookup'
 import { docList, docsLayout, docsSection, visibleDocs } from './docs/view'
 import { band, parseHud, status } from './hud'
-import { API_BASE, addPins, createdSince, shownPins, diffStat, exportFromProfile, findMrLinks, isMrCreation, isOpen, parseRemote, pickMrs, repoLabel, stateOf, toView, tokenFromProfile } from './mr/codeup'
+import { API_BASE, addPins, createdSince, isMention, isOwnSince, diffStat, exportFromProfile, findMrLinks, isMrCreation, isOpen, parseRemote, pickMrs, repoLabel, stateOf, toView, tokenFromProfile } from './mr/codeup'
 import type { ApiChangeRequest, ApiCompare, ApiDetail, MrPin, Repo } from './mr/codeup'
 import { mrKey } from './mr/session'
 import { compareRange, findPrLinks, parseGithubRemote, pickPrs, prQuery, prView, prsOf } from './mr/github'
@@ -217,9 +217,9 @@ async function ghJson($: EngineInterface, args: readonly string[]): Promise<unkn
 }
 
 /** The PRs of `branch` (picked as for Codeup) and the PRs pinned by number, as rows, in one GraphQL call. */
-async function githubPrs($: EngineInterface, repo: GhRepo, branch: string | undefined, numbers: readonly number[]): Promise<MrView[]> {
-  const { branch: ofBranch, pinned } = prsOf(await ghJson($, ['api', 'graphql', '-f', `query=${prQuery(repo, branch, numbers)}`]))
-  const prs = [...pickPrs(ofBranch), ...pinned.filter(p => !ofBranch.some(b => b.number === p.number))]
+async function githubPrs($: EngineInterface, repo: GhRepo, branch: string | undefined, numbers: readonly number[], keep: (pr: ApiPr, viewer?: string) => boolean = () => true): Promise<MrView[]> {
+  const { branch: ofBranch, pinned, viewer } = prsOf(await ghJson($, ['api', 'graphql', '-f', `query=${prQuery(repo, branch, numbers)}`]))
+  const prs = [...pickPrs(ofBranch), ...pinned.filter(p => !ofBranch.some(b => b.number === p.number) && keep(p, viewer))]
   return Promise.all(prs.map(async (pr: ApiPr) => {
     const behind = pr.state === 'OPEN'
       ? await ghJson($, ['api', `repos/${repo.owner}/${repo.name}/compare/${compareRange(pr)}`, '--jq', '{behind_by}'])
@@ -232,16 +232,21 @@ async function githubPrs($: EngineInterface, repo: GhRepo, branch: string | unde
 
 /** Rows for the pinned MRs not already shown, one group per repo; a repo that fails says so in its group. */
 async function pinnedViews($: EngineInterface, token: string | undefined, pins: readonly MrPin[], shown: ReadonlySet<string>): Promise<RepoView[]> {
+  // A mention shows only when it is the user's own MR opened since the session began (unknown start: none shows).
+  const since = await $.session.usage().then(u => u.startedAt - CREATE_SLACK_MS, () => Number.POSITIVE_INFINITY)
+  const mentioned = new Set(pins.filter(isMention).map(p => `${p.forge ?? 'codeup'}:${p.repoPath}!${p.localId}`))
   const ghPins = pins.filter(p => p.forge === 'github' && !shown.has(`${p.repoPath}#${p.localId}`))
   const ghByRepo = new Map<string, number[]>()
   for (const p of ghPins) ghByRepo.set(p.repoPath, [...(ghByRepo.get(p.repoPath) ?? []), p.localId])
   const github = await Promise.all([...ghByRepo].map(async ([path, ids]): Promise<RepoView> => {
     const [owner = '', name = ''] = path.split('/')
-    return githubPrs($, { owner, name }, undefined, ids)
+    const keep = (pr: ApiPr, viewer?: string) => !mentioned.has(`github:${path}!${pr.number}`) || isOwnSince(pr.author?.login, viewer, pr.createdAt, since)
+    return githubPrs($, { owner, name }, undefined, ids, keep)
       .then((mrs): RepoView => ({ root: '', repo: path, branch: '', mrs, forge: 'github' }))
       .catch((err: Error): RepoView => ({ root: '', repo: path, branch: '', mrs: [], error: err.message, forge: 'github' }))
   }))
   if (!token) return github
+  const me = await userOf($, token).then(u => u.id, () => undefined)
   const byRepo = new Map<string, number[]>()
   for (const p of pins) if (p.forge !== 'github' && !shown.has(`${repoLabel(p.repoPath)}!${p.localId}`)) byRepo.set(p.repoPath, [...(byRepo.get(p.repoPath) ?? []), p.localId])
   const codeup = await Promise.all([...byRepo].map(async ([path, ids]): Promise<RepoView> => {
@@ -249,7 +254,7 @@ async function pinnedViews($: EngineInterface, token: string | undefined, pins: 
     const name = repoLabel(path)
     try {
       const { base, list } = await repoMrs($, token, repo)
-      const crs = list.filter(cr => ids.includes(cr.localId))
+      const crs = list.filter(cr => ids.includes(cr.localId) && (!mentioned.has(`codeup:${path}!${cr.localId}`) || isOwnSince(cr.author?.userId, me, cr.createdAt, since)))
       // A pinned MR has no checkout to read a head from: its last update stands in, so new pushes refetch the stats.
       return { root: '', repo: name, branch: '', mrs: await mrViews($, token, repo, base, crs, cr => cr.updatedAt ?? '') }
     } catch (err) {
@@ -304,7 +309,7 @@ async function codeupRootCount($: EngineInterface, roots: readonly string[]): Pr
 
 async function refreshMrs($: EngineInterface, settings: Settings) {
   const found = await sessionRoots($)
-  const pins = shownPins(listOf<MrPin>(await read($, mrPinned)))
+  const pins = listOf<MrPin>(await read($, mrPinned))
   if (!found.length && !pins.length) {
     await update($, mrView, () => null)
     return
@@ -323,7 +328,8 @@ async function pinMrs($: EngineInterface, settings: Settings, added: readonly Mr
   if (!added.length) return
   const known = listOf<MrPin>(await read($, mrPinned))
   const next = addPins(known, added)
-  if (next.length === known.length) return
+  // A new pin, or one whose reason grew (a mention now made / asked for): anything else changes nothing.
+  if (JSON.stringify(next) === JSON.stringify(known)) return
   await update($, mrPinned, () => next)
   await refreshMrs($, settings)
 }
@@ -332,6 +338,9 @@ async function pinMrs($: EngineInterface, settings: Settings, added: readonly Mr
  * The MRs a create call just opened: the token owner's newest MRs created since the call started. Read by author and
  * time, not from the call's output, so it works however the call printed (or hid) what it made.
  */
+/** Every MR / PR linked in `text`, pinned as a mention. */
+const mentionsOf = (text: string): MrPin[] => [...findMrLinks(text), ...findPrLinks(text)].map(p => ({ ...p, via: 'mentioned' as const }))
+
 /** A create call that opens a GitHub PR: its link is in its output, and there is no Codeup author list to read. */
 const isGithubOnly = (input: Readonly<Record<string, unknown>>): boolean => typeof input.command === 'string' && /\bgh\s+pr\s+create\b|\/pulls\b/.test(input.command)
 
@@ -795,6 +804,7 @@ export const register: Register = (on, options) => {
   on('prompt.submit', async ($, e, next) => {
     if (settings.docs) await guard($, 'docs', () => rememberDocs($, findAllDocs(e.text, settings.docsArtifacts), 'mentioned', settings))
     if (settings.deploy) await guard($, 'deploy', () => trackDeploys($, e.text, settings))
+    if (settings.mr) await guard($, 'mr', () => pinMrs($, settings, mentionsOf(e.text)))
     return next(e)
   })
 
@@ -807,7 +817,9 @@ export const register: Register = (on, options) => {
     const output = !ran.isError && 'text' in ran && typeof ran.text === 'string' ? ran.text : ''
     if (settings.mr) {
       await guard($, 'mr', () => rememberMrDirs($, tool, input))
-      // Only what a create call made is pinned: an MR a command merely printed (a search, a log) is not the session's.
+      // What a create call made shows as made; anything else a call names is a mention, shown only when it is the user's
+      // own MR opened during the session (a helper session's, say), never one met while investigating.
+      await guard($, 'mr', () => pinMrs($, settings, mentionsOf(`${JSON.stringify(input)}\n${output}`)))
       if (mrCreateStart !== undefined && !ran.isError) {
         const made = [...findMrLinks(output), ...findPrLinks(output)].map(p => ({ ...p, via: 'created' as const }))
         await guard($, 'mr', () => pinMrs($, settings, made))
@@ -825,7 +837,10 @@ export const register: Register = (on, options) => {
     if (e.agentId) return result
     const answer = 'answer' in e && typeof e.answer === 'string' ? e.answer : ''
     await Promise.all([
-      settings.mr && guard($, 'mr', () => refreshMrs($, settings)),
+      settings.mr && guard($, 'mr', async () => {
+        await pinMrs($, settings, mentionsOf(answer))
+        await refreshMrs($, settings)
+      }),
       settings.docs && guard($, 'docs', () => rememberDocs($, findAllDocs(answer, settings.docsArtifacts), 'mentioned', settings)),
     ])
     // Title lookups run lark-cli (seconds each): off the turn's path, on a timer.

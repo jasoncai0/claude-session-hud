@@ -45,10 +45,10 @@ const releaseRun = (status: string) => ({
   },
 })
 
-type World = { cwd?: string; branch?: string; calls?: string[]; extra?: object[]; toolText?: string; isBranchGone?: boolean; detail?: object; state?: string; release?: { status: string }; larkTimeouts?: { left: number }; ghDown?: { isOn: boolean }; store?: Map<string, unknown>; archivedText?: string; sessionRoot?: string; transcript?: string; takenCommands?: string[]; commands?: string[] }
+type World = { cwd?: string; branch?: string; calls?: string[]; extra?: object[]; toolText?: string; isBranchGone?: boolean; detail?: object; state?: string; release?: { status: string }; larkTimeouts?: { left: number }; ghDown?: { isOn: boolean }; store?: Map<string, unknown>; archivedText?: string; sessionRoot?: string; transcript?: string; takenCommands?: string[]; commands?: string[]; isOwnMr77?: boolean }
 
 /** Two Codeup checkouts (/w/demo-api is the cwd, /w/billing-svc), lark-cli answering titles, a tool bottom echoing `toolText`. */
-function world(on: On, { cwd = '/w/demo-api/src', branch = 'feat', calls = [], extra = [], toolText = '', isBranchGone = false, detail = DETAIL, state = 'TO_BE_MERGED', release = { status: 'RUNNING' }, larkTimeouts = { left: 0 }, ghDown = { isOn: false }, store = new Map<string, unknown>(), archivedText = '', sessionRoot = '', transcript = '', takenCommands = [], commands = [] }: World = {}) {
+function world(on: On, { cwd = '/w/demo-api/src', branch = 'feat', calls = [], extra = [], toolText = '', isBranchGone = false, detail = DETAIL, state = 'TO_BE_MERGED', release = { status: 'RUNNING' }, larkTimeouts = { left: 0 }, ghDown = { isOn: false }, store = new Map<string, unknown>(), archivedText = '', sessionRoot = '', transcript = '', takenCommands = [], commands = [], isOwnMr77 = false }: World = {}) {
   mock.env(on, { ALIBABA_CLOUD_YUNXIAO_ACCESS_TOKEN: 'pt-test', HOME: '/home/me' })
   const clock = mock.clock(on, { now: Date.parse('2026-10-15T10:00:00Z') })
   on('ui.log', async (_$, e) => {
@@ -69,7 +69,7 @@ function world(on: On, { cwd = '/w/demo-api/src', branch = 'feat', calls = [], e
   on('store.set', async (_$, e) => (store.set(e.key, JSON.parse(JSON.stringify(e.value))), { value: undefined }) as never)
   on('store.delete', async (_$, e) => (store.delete(e.key), { value: undefined }) as never)
   on('store.keys', async () => ({ value: [...store.keys()] }) as never)
-  on('session.usage', async () => ({ value: { rateLimits: [{ kind: 'five_hour', percentUsed: 42, resetsAt: '2999-01-01T00:00:00Z' }], context: { tokens: 84_200, window: 200_000, percent: 42 } } }) as never)
+  on('session.usage', async () => ({ value: { startedAt: Date.parse('2026-10-15T09:00:00Z'), rateLimits: [{ kind: 'five_hour', percentUsed: 42, resetsAt: '2999-01-01T00:00:00Z' }], context: { tokens: 84_200, window: 200_000, percent: 42 } } }) as never)
   on('process.run', async (_$, e) => {
     if (String(e.argv[0]).endsWith('lark-cli')) {
       calls.push(`lark ${e.argv.join(' ')}`)
@@ -139,7 +139,7 @@ function world(on: On, { cwd = '/w/demo-api/src', branch = 'feat', calls = [], e
     const id = Object.entries(REPO_IDS).find(([, v]) => e.url.includes(`projectIds=${v}`) || e.url.includes(`/repositories/${v}/`))
     const body = e.url.includes('/compares') ? COMPARE
       : /\/changeRequests\/\d+$/.test(e.url) ? detail
-      : e.url.includes('/changeRequests?') ? [{ ...mrOf(id?.[0] ?? '?', id?.[0] === 'demo-api' ? 191 : 53, branch), state }, ...(id?.[0] === 'demo-api' ? extra : [mrOf('billing-svc', 77, 'fix/space-online')])]
+      : e.url.includes('/changeRequests?') ? [{ ...mrOf(id?.[0] ?? '?', id?.[0] === 'demo-api' ? 191 : 53, branch), state }, ...(id?.[0] === 'demo-api' ? extra : [{ ...mrOf('billing-svc', 77, 'fix/space-online'), ...(isOwnMr77 ? { author: { userId: 'u1' }, createdAt: '2026-10-15T18:30:00+08:00' } : {}) }])]
       : { id: REPO_IDS[decodeURIComponent(e.url).split('/').at(-1) ?? ''] }
     return { value: { status: 200, ok: true, headers: {}, text: JSON.stringify(body) } }
   })
@@ -361,6 +361,15 @@ test('an MR only linked while investigating (prompt, command output, answer) is 
   const after = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...BAND })
   expect(await after.find({ type: 'Link', text: '!77' })).toBeDefined()
   await after.unmount()
+})
+
+test('a mentioned MR shows when it is the user\'s own, opened since the session began (a helper session made it)', async ($, on) => {
+  world(on, { branch: 'lonely', isOwnMr77: true })
+  await $.session.start(START)
+  await $.turn.complete(turn(`协作会话已创建 https://codeup.aliyun.com/${ORG}/backend/billing-svc/change/77`))
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...BAND })
+  expect(await ui.find({ type: 'Link', text: '!77' })).toBeDefined()
+  await ui.unmount()
 })
 
 test('a PR the session opens with gh pr create shows from its output', async ($, on) => {

@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { LIST_MAX } from '../settings'
-import { addPins, shownPins, branchChecks, checksOf, createdSince, findMrLinks, isMrCreation, diffStat, repoLabel, thousands, parseRemote, pickMrs, stateOf, summarize, toView, tokenFromProfile } from './codeup'
+import { addPins, isMention, isOwnSince, branchChecks, checksOf, createdSince, findMrLinks, isMrCreation, diffStat, repoLabel, thousands, parseRemote, pickMrs, stateOf, summarize, toView, tokenFromProfile } from './codeup'
 import type { ApiChangeRequest } from './codeup'
 
 const ORG = 'my-org-id'
@@ -129,10 +129,16 @@ test('createdSince keeps the MRs created at or after the call; addPins dedupes',
   const pins = createdSince(list, at)
   expect(pins).toEqual([{ repoPath: `${ORG}/backend/demo-api`, localId: 206 }])
   expect(addPins(pins, [...pins, { repoPath: 'x/y', localId: 1 }])).toHaveLength(2)
-  // A pin an older version kept for a mere mention (no via) is dropped as soon as the list changes.
-  const made = { repoPath: 'x/y', localId: 2, via: 'created' as const }
-  expect(addPins([{ repoPath: 'old/mention', localId: 9 }, made], [{ repoPath: 'x/y', localId: 3, via: 'tracked' }]).map(p => p.localId)).toEqual([2, 3])
-  expect(shownPins([{ repoPath: 'a/b', localId: 1 }, made])).toEqual([made])
+  // Made or asked for replaces a mention of the same MR; a mention never downgrades either.
+  const mention = { repoPath: 'x/y', localId: 2, via: 'mentioned' as const }
+  expect(addPins([mention], [{ ...mention, via: 'created' }])).toEqual([{ ...mention, via: 'created' }])
+  expect(addPins([{ ...mention, via: 'tracked' }], [mention])).toEqual([{ ...mention, via: 'tracked' }])
+  expect([isMention({ repoPath: 'a/b', localId: 1 }), isMention(mention), isMention({ ...mention, via: 'created' })]).toEqual([true, true, false])
+  const since = Date.parse('2026-10-21T00:00:00Z')
+  expect(isOwnSince('me', 'me', '2026-10-22T12:03:20+08:00', since)).toBe(true)
+  expect(isOwnSince('other', 'me', '2026-10-22T12:03:20+08:00', since)).toBe(false)
+  expect(isOwnSince('me', 'me', '2026-10-01T00:00:00Z', since)).toBe(false)
+  expect(isOwnSince(undefined, undefined, '2026-10-22T00:00:00Z', since)).toBe(false)
   const many = Array.from({ length: LIST_MAX + 5 }, (_, i) => ({ repoPath: 'x/y', localId: i }))
   expect(addPins([], many).map(p => p.localId).slice(0, 1)).toEqual([5])
   expect(addPins([], many)).toHaveLength(LIST_MAX)

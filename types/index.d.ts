@@ -108,7 +108,7 @@ declare module 'claude-code' {
       /** `${repo}!${id}` of MRs hidden from the band. */
       mrDismissed: string[]
       /** MRs the session opened (found by author and time) or linked, shown whatever branch is checked out. */
-      mrPinned: { repoPath: string; localId: number; forge?: 'github'; via?: 'created' | 'tracked' }[]
+      mrPinned: { repoPath: string; localId: number; forge?: 'github'; via?: 'created' | 'tracked' | 'mentioned' }[]
       /** Newest first. */
       docs: DocLink[]
       /** Tokens hidden from the band. */

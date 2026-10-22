@@ -31,6 +31,8 @@ export function exportFromProfile(text: string, name: string): string | undefine
 type ApiReviewer = { reviewOpinionStatus?: string }
 export type ApiChangeRequest = {
   localId: number
+  /** `userId` is the platform user id (`platform/user`'s `id`). */
+  author?: { userId?: string }
   createdAt?: string
   updatedAt?: string
   detailUrl: string
@@ -56,10 +58,13 @@ export const isOpen = (cr: ApiChangeRequest) => !CLOSED_STATES.has(cr.state)
 
 /** An MR the session made or named, pinned to the band whatever branch its checkout is on. */
 /**
- * An MR shown whatever branch is checked out: one the session opened (`created`) or one asked for with `/mr <link>`
- * (`tracked`). An MR the session only came across (a link in a message, an answer, a command's output) is not one.
+ * An MR shown whatever branch is checked out: one the session opened (`created`), one asked for with `/mr <link>`
+ * (`tracked`), or one it came across (`mentioned`: a link in a message, an answer, a command's output; a pin without
+ * `via` is an older version's, read the same). A mentioned one shows only when it is the user's own and opened since
+ * the session began: the work of this feature, a helper session's included, not an MR looked at while investigating.
  */
-export type MrPin = { repoPath: string; localId: number; forge?: 'github'; via?: 'created' | 'tracked' }
+export type MrPin = { repoPath: string; localId: number; forge?: 'github'; via?: PinVia }
+export type PinVia = 'created' | 'tracked' | 'mentioned'
 
 const MR_URL_RE = /https?:\/\/codeup\.aliyun\.com\/((?:[\w.-]+\/)+[\w.-]+?)\/change\/(\d+)/g
 /** A call that opens an MR: the devops CLI, a POST to the changeRequests API, or a push option asking Codeup to. */
@@ -90,14 +95,22 @@ export function createdSince(list: readonly ApiChangeRequest[], since: number): 
 }
 
 /** Pins added, deduped, newest last. */
-/** Pins as they now mean: made or asked for; one an older version kept for a mere mention is dropped. */
-export const shownPins = (pins: readonly MrPin[]): MrPin[] => pins.filter(p => p.via === 'created' || p.via === 'tracked')
+/** Whether a pin shows only when it is the user's own MR, opened since the session began. */
+export const isMention = (p: MrPin): boolean => p.via !== 'created' && p.via !== 'tracked'
 
+/** The user's own MR, opened at or after `since` (epoch ms): what a mention must be to show. */
+export const isOwnSince = (author: string | undefined, me: string | undefined, createdAt: string | undefined, since: number): boolean =>
+  Boolean(author && me && author === me) && Date.parse(createdAt ?? '') >= since
+
+/** Pins added, deduped, newest last; a stronger reason (made, asked for) replaces a mention of the same MR. */
 export const addPins = (known: readonly MrPin[], added: readonly MrPin[]): MrPin[] => {
   const key = (p: MrPin) => `${p.forge ?? 'codeup'}:${p.repoPath}!${p.localId}`
-  const live = shownPins(known)
-  const fresh = added.filter(p => !live.some(k => key(k) === key(p)))
-  return [...live, ...fresh].slice(-LIST_MAX)
+  const upgraded = known.map(k => {
+    const better = added.find(a => key(a) === key(k) && isMention(k) && !isMention(a))
+    return better ? { ...k, via: better.via } : k
+  })
+  const fresh = added.filter(p => !known.some(k => key(k) === key(p)))
+  return [...upgraded, ...fresh].slice(-LIST_MAX)
 }
 
 /** Open MRs of the branch (newest first, capped); none open → the latest closed/merged one. */

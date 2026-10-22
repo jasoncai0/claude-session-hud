@@ -28,7 +28,7 @@ export function findPrLinks(text: string): MrPin[] {
 }
 
 const FIELDS = `fragment F on PullRequest {
-  number url title state isDraft merged createdAt additions deletions
+  number url title state isDraft merged createdAt additions deletions author { login }
   headRefName baseRefName headRef { name } headRepositoryOwner { login }
   mergeable mergeStateStatus reviewDecision
   commits(last: 1) { totalCount nodes { commit { statusCheckRollup { state contexts(first: 50) { nodes {
@@ -46,7 +46,7 @@ export function prQuery(repo: GhRepo, branch: string | undefined, numbers: reado
     ? `branch: pullRequests(headRefName: ${JSON.stringify(branch)}, first: ${LIST_MAX}, states: [OPEN, MERGED, CLOSED], orderBy: { field: CREATED_AT, direction: DESC }) { nodes { ...F } }`
     : ''
   const pinned = numbers.map(n => `n${n}: pullRequest(number: ${Math.trunc(n)}) { ...F }`).join('\n')
-  return `query { repository(owner: ${JSON.stringify(repo.owner)}, name: ${JSON.stringify(repo.name)}) {\n${byBranch}\n${pinned}\n} }\n${FIELDS}`
+  return `query { viewer { login } repository(owner: ${JSON.stringify(repo.owner)}, name: ${JSON.stringify(repo.name)}) {\n${byBranch}\n${pinned}\n} }\n${FIELDS}`
 }
 
 type ApiContext = { __typename?: string; name?: string; context?: string; status?: string; conclusion?: string | null; state?: string }
@@ -58,6 +58,8 @@ export type ApiPr = {
   state: 'OPEN' | 'MERGED' | 'CLOSED'
   isDraft: boolean
   merged: boolean
+  createdAt?: string
+  author?: { login: string } | null
   additions: number
   deletions: number
   headRefName: string
@@ -71,12 +73,14 @@ export type ApiPr = {
   reviewThreads: { nodes: { isResolved: boolean }[] }
 }
 
-/** The PRs in a query's answer: the branch's, then the pinned ones by alias; nulls (no such PR) dropped. */
-export function prsOf(answer: unknown): { branch: ApiPr[]; pinned: ApiPr[] } {
-  const repo = (answer as { data?: { repository?: Record<string, unknown> | null } } | null)?.data?.repository ?? {}
+/** The PRs in a query's answer: the branch's, then the pinned ones by alias, nulls (no such PR) dropped; and who asked. */
+export function prsOf(answer: unknown): { branch: ApiPr[]; pinned: ApiPr[]; viewer?: string } {
+  const data = (answer as { data?: { repository?: Record<string, unknown> | null; viewer?: { login?: string } | null } } | null)?.data
+  const repo = data?.repository ?? {}
   const branch = ((repo.branch as { nodes?: ApiPr[] } | undefined)?.nodes ?? []).filter(Boolean)
   const pinned = Object.entries(repo).filter(([k, v]) => k.startsWith('n') && v).map(([, v]) => v as ApiPr)
-  return { branch, pinned }
+  const viewer = data?.viewer?.login
+  return { branch, pinned, ...(viewer ? { viewer } : {}) }
 }
 
 /** Open PRs of the branch (newest first, capped); none open → the latest merged / closed one. */
