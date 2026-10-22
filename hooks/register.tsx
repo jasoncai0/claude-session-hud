@@ -12,7 +12,7 @@ import { LARK_CLI, inspectArgv, isMissingProgram, lookupOf } from './docs/lookup
 import type { Lookup } from './docs/lookup'
 import { docList, docsLayout, docsSection, visibleDocs } from './docs/view'
 import { band, parseHud, status } from './hud'
-import { API_BASE, addPins, createdSince, diffStat, exportFromProfile, findMrLinks, isMrCreation, isOpen, parseRemote, pickMrs, repoLabel, stateOf, toView, tokenFromProfile } from './mr/codeup'
+import { API_BASE, addPins, createdSince, shownPins, diffStat, exportFromProfile, findMrLinks, isMrCreation, isOpen, parseRemote, pickMrs, repoLabel, stateOf, toView, tokenFromProfile } from './mr/codeup'
 import type { ApiChangeRequest, ApiCompare, ApiDetail, MrPin, Repo } from './mr/codeup'
 import { mrKey } from './mr/session'
 import { compareRange, findPrLinks, parseGithubRemote, pickPrs, prQuery, prView, prsOf } from './mr/github'
@@ -304,7 +304,7 @@ async function codeupRootCount($: EngineInterface, roots: readonly string[]): Pr
 
 async function refreshMrs($: EngineInterface, settings: Settings) {
   const found = await sessionRoots($)
-  const pins = listOf<MrPin>(await read($, mrPinned))
+  const pins = shownPins(listOf<MrPin>(await read($, mrPinned)))
   if (!found.length && !pins.length) {
     await update($, mrView, () => null)
     return
@@ -332,6 +332,9 @@ async function pinMrs($: EngineInterface, settings: Settings, added: readonly Mr
  * The MRs a create call just opened: the token owner's newest MRs created since the call started. Read by author and
  * time, not from the call's output, so it works however the call printed (or hid) what it made.
  */
+/** A create call that opens a GitHub PR: its link is in its output, and there is no Codeup author list to read. */
+const isGithubOnly = (input: Readonly<Record<string, unknown>>): boolean => typeof input.command === 'string' && /\bgh\s+pr\s+create\b|\/pulls\b/.test(input.command)
+
 async function pinCreatedMrs($: EngineInterface, settings: Settings, since: number) {
   const token = await cachedToken($, settings)
   const org = token ? await cachedOrg($, token) : undefined
@@ -339,7 +342,7 @@ async function pinCreatedMrs($: EngineInterface, settings: Settings, since: numb
   const userId = (await userOf($, token)).id
   if (!userId) return
   const list = await api<ApiChangeRequest[]>($, token, `${org}/changeRequests?authorIds=${userId}&state=all&perPage=${AUTHOR_PAGE}&orderBy=created_at&sort=desc`)
-  await pinMrs($, settings, createdSince(list, since - CREATE_SLACK_MS))
+  await pinMrs($, settings, createdSince(list, since - CREATE_SLACK_MS).map(p => ({ ...p, via: 'created' as const })))
 }
 
 async function rememberMrDirs($: EngineInterface, tool: string, input: Readonly<Record<string, unknown>>) {
@@ -726,10 +729,12 @@ export const register: Register = (on, options) => {
       void guard($, 'persist', () => pruneStore($))
       $.clock.every(SAVE_EVERY_MS, () => void guard($, 'persist', () => saveSession($)))
     }
-    await $.command.register({ name: 'hud', description: 'session-hud：查看 / 启停模块、折叠、修改配置', argumentHint: '[usage|mr|docs|deploy on|off | fold | unfold | set <key> <value>]' })
-    if (settings.mr) await $.command.register({ name: 'mr', description: '列出本会话涉及仓库的 Codeup MR 及链接' })
-    if (settings.docs) await $.command.register({ name: 'docs', description: '列出本会话创建或提到的飞书文档及链接' })
-    if (settings.deploy) await $.command.register({ name: 'deploys', description: '列出本会话的云效发布；带 AppStack 阶段链接则跟踪该阶段', argumentHint: '[AppStack 阶段链接]' })
+    // Each on its own: a name a newer Claude Code takes for itself is refused, and that must not stop the rest of the start.
+    await guard($, 'command', () => $.command.register({ name: 'hud', description: 'session-hud：查看 / 启停模块、折叠、修改配置', argumentHint: '[usage|mr|docs|deploy on|off | fold | unfold | set <key> <value>]' }))
+    if (settings.mr) await guard($, 'command', () => $.command.register({ name: 'mr', description: '列出本会话的 MR / PR；带 MR / PR 链接则跟踪它', argumentHint: '[MR / PR 链接]' }))
+    // Not `docs`: Claude Code ships a /docs of its own.
+    if (settings.docs) await guard($, 'command', () => $.command.register({ name: 'doclinks', description: '列出本会话创建或提到的飞书文档 / Artifacts 及链接' }))
+    if (settings.deploy) await guard($, 'command', () => $.command.register({ name: 'deploys', description: '列出本会话的云效发布；带 AppStack 阶段链接则跟踪该阶段', argumentHint: '[AppStack 阶段链接]' }))
     if (settings.usage) await guard($, 'usage', () => refreshUsage($))
     if (settings.mr) {
       void guard($, 'mr', () => refreshMrs($, settings))
@@ -752,7 +757,6 @@ export const register: Register = (on, options) => {
   on('prompt.submit', async ($, e, next) => {
     if (settings.docs) await guard($, 'docs', () => rememberDocs($, findAllDocs(e.text, settings.docsArtifacts), 'mentioned', settings))
     if (settings.deploy) await guard($, 'deploy', () => trackDeploys($, e.text, settings))
-    if (settings.mr) await guard($, 'mr', () => pinMrs($, settings, [...findMrLinks(e.text), ...findPrLinks(e.text)]))
     return next(e)
   })
 
@@ -765,9 +769,12 @@ export const register: Register = (on, options) => {
     const output = !ran.isError && 'text' in ran && typeof ran.text === 'string' ? ran.text : ''
     if (settings.mr) {
       await guard($, 'mr', () => rememberMrDirs($, tool, input))
-      const said = `${JSON.stringify(input)}\n${output}`
-      await guard($, 'mr', () => pinMrs($, settings, [...findMrLinks(said), ...findPrLinks(said)]))
-      if (mrCreateStart !== undefined && !ran.isError) await guard($, 'mr', () => pinCreatedMrs($, settings, mrCreateStart))
+      // Only what a create call made is pinned: an MR a command merely printed (a search, a log) is not the session's.
+      if (mrCreateStart !== undefined && !ran.isError) {
+        const made = [...findMrLinks(output), ...findPrLinks(output)].map(p => ({ ...p, via: 'created' as const }))
+        await guard($, 'mr', () => pinMrs($, settings, made))
+        if (!isGithubOnly(input)) await guard($, 'mr', () => pinCreatedMrs($, settings, mrCreateStart))
+      }
     }
     if (settings.docs) await guard($, 'docs', () => rememberToolDocs($, tool, input, output, settings))
     if (settings.deploy) await guard($, 'deploy', () => rememberDeploy($, tool, input, 'text' in ran && typeof ran.text === 'string' ? ran.text : '', Boolean(ran.isError), settings))
@@ -780,10 +787,7 @@ export const register: Register = (on, options) => {
     if (e.agentId) return result
     const answer = 'answer' in e && typeof e.answer === 'string' ? e.answer : ''
     await Promise.all([
-      settings.mr && guard($, 'mr', async () => {
-        await pinMrs($, settings, [...findMrLinks(answer), ...findPrLinks(answer)])
-        await refreshMrs($, settings)
-      }),
+      settings.mr && guard($, 'mr', () => refreshMrs($, settings)),
       settings.docs && guard($, 'docs', () => rememberDocs($, findAllDocs(answer, settings.docsArtifacts), 'mentioned', settings)),
     ])
     // Title lookups run lark-cli (seconds each): off the turn's path, on a timer.
@@ -799,8 +803,11 @@ export const register: Register = (on, options) => {
 
   on('command.run', { command: 'hud' }, async ($, e) => ({ text: await runHud($, e.args, settings) }))
 
-  on('command.run', { command: 'mr' }, async $ => {
+  on('command.run', { command: 'mr' }, async ($, e) => {
     if (!settings.mr) return { text: 'Codeup MR 模块已关闭：/hud mr on' }
+    // `/mr <link>`: track an MR / PR this session did not open (one linked while investigating is not shown by itself).
+    const asked = [...findMrLinks(e.args), ...findPrLinks(e.args)].map(p => ({ ...p, via: 'tracked' as const }))
+    if (asked.length) await pinMrs($, settings, asked)
     await refreshMrs($, settings)
     const v = await read($, mrView)
     return { text: v?.error ?? mrList(v?.repos ?? [], state => stateOf(state).label) }
@@ -813,7 +820,7 @@ export const register: Register = (on, options) => {
     return { text: deployList(listOf<DeployRun>(await read($, deploys))) }
   })
 
-  on('command.run', { command: 'docs' }, async $ => ({
+  on('command.run', { command: 'doclinks' }, async $ => ({
     text: settings.docs ? (await guard($, 'docs', () => lookupTitles($)), docList(listOf<DocLink>(await read($, docs)))) : '飞书文档模块已关闭：/hud docs on',
   }))
 

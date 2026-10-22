@@ -9,7 +9,7 @@ import { LIST_MAX } from './settings'
  */
 export type Saved = {
   mrDirs: string[]
-  mrPinned: { repoPath: string; localId: number; forge?: 'github' }[]
+  mrPinned: { repoPath: string; localId: number; forge?: 'github'; via?: 'created' | 'tracked' }[]
   mrDismissed: string[]
   docs: DocLink[]
   docsDismissed: string[]

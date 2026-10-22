@@ -9,10 +9,17 @@ export const mrRef = (mr: Pick<MrView, 'id' | 'forge'>) => `${mr.forge === 'gith
 export const mrKey = (mr: Pick<MrView, 'repo' | 'id' | 'forge'>) => `${mr.repo}${mrRef(mr)}`
 
 /** Directories a tool call works in: an edited file's folder, a Bash `cd X` or `git -C X`. */
+/** Git work on a branch: what makes a repo the session's own, beside editing its files. Reading one (log, diff, grep) does not. */
+const GIT_WORK_RE = /\bgit\b(?:\s+-C\s+\S+)?\s+(?:commit|push|checkout|switch|merge|rebase|cherry-pick|am|apply|reset|worktree\s+add)\b|\bgh\s+pr\s+create\b/
+
+/**
+ * The directories a call worked in: a file it wrote or edited, or the `cd` / `git -C` dirs of a command that does git
+ * work there. A repo only looked into while investigating (cd, ls, git log) is not the session's: its MRs stay out.
+ */
 export function dirsOf(tool: string, input: { file_path?: unknown; notebook_path?: unknown; command?: unknown }, home: string): string[] {
   const file = typeof input.file_path === 'string' ? input.file_path : typeof input.notebook_path === 'string' ? input.notebook_path : undefined
   if (file && tool !== 'Read') return [file.slice(0, file.lastIndexOf('/')) || '/']
-  if (tool !== 'Bash' || typeof input.command !== 'string') return []
+  if (tool !== 'Bash' || typeof input.command !== 'string' || !GIT_WORK_RE.test(input.command)) return []
   const found = [...input.command.matchAll(/(?:^|[\s;&|(])(?:cd|git\s+-C)\s+("[^"]+"|'[^']+'|[^\s;&|)]+)/g)]
   return found
     .map(m => (m[1] ?? '').replace(/^(['"])(.*)\1$/, '$2').replace(/^~(?=\/|$)/, home))

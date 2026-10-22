@@ -55,11 +55,15 @@ export type ApiCompare = { diffs?: { diff?: string }[] }
 export const isOpen = (cr: ApiChangeRequest) => !CLOSED_STATES.has(cr.state)
 
 /** An MR the session made or named, pinned to the band whatever branch its checkout is on. */
-export type MrPin = { repoPath: string; localId: number; forge?: 'github' }
+/**
+ * An MR shown whatever branch is checked out: one the session opened (`created`) or one asked for with `/mr <link>`
+ * (`tracked`). An MR the session only came across (a link in a message, an answer, a command's output) is not one.
+ */
+export type MrPin = { repoPath: string; localId: number; forge?: 'github'; via?: 'created' | 'tracked' }
 
 const MR_URL_RE = /https?:\/\/codeup\.aliyun\.com\/((?:[\w.-]+\/)+[\w.-]+?)\/change\/(\d+)/g
 /** A call that opens an MR: the devops CLI, a POST to the changeRequests API, or a push option asking Codeup to. */
-const MR_CREATE_RE = /\bcodeup-create-change-request\b|\bmerge_request\.create\b|\/changeRequests\b[^\n]*(?:-X\s*POST|--request\s+POST)|(?:-X\s*POST|--request\s+POST)[^\n]*\/changeRequests\b/
+const MR_CREATE_RE = /\bcodeup-create-change-request\b|\bmerge_request\.create\b|\/changeRequests\b[^\n]*(?:-X\s*POST|--request\s+POST)|(?:-X\s*POST|--request\s+POST)[^\n]*\/changeRequests\b|\bgh\s+pr\s+create\b|\/pulls\b[^\n]*(?:-X\s*POST|--method\s+POST)/
 
 /** Every Codeup MR page linked in `text`, deduped. */
 export function findMrLinks(text: string): MrPin[] {
@@ -70,7 +74,7 @@ export function findMrLinks(text: string): MrPin[] {
   return [...found.values()]
 }
 
-/** A tool call that opens a Codeup MR, however it is spelled: what it made is then looked up by author and time. */
+/** A tool call that opens an MR / PR, however it is spelled: a Codeup one is then looked up by author and time. */
 export function isMrCreation(tool: string, input: { command?: unknown }): boolean {
   if (tool === 'Bash') return typeof input.command === 'string' && MR_CREATE_RE.test(input.command)
   return /codeup/i.test(tool) && /create/i.test(tool) && /change|merge/i.test(tool)
@@ -86,10 +90,14 @@ export function createdSince(list: readonly ApiChangeRequest[], since: number): 
 }
 
 /** Pins added, deduped, newest last. */
+/** Pins as they now mean: made or asked for; one an older version kept for a mere mention is dropped. */
+export const shownPins = (pins: readonly MrPin[]): MrPin[] => pins.filter(p => p.via === 'created' || p.via === 'tracked')
+
 export const addPins = (known: readonly MrPin[], added: readonly MrPin[]): MrPin[] => {
   const key = (p: MrPin) => `${p.forge ?? 'codeup'}:${p.repoPath}!${p.localId}`
-  const fresh = added.filter(p => !known.some(k => key(k) === key(p)))
-  return [...known, ...fresh].slice(-LIST_MAX)
+  const live = shownPins(known)
+  const fresh = added.filter(p => !live.some(k => key(k) === key(p)))
+  return [...live, ...fresh].slice(-LIST_MAX)
 }
 
 /** Open MRs of the branch (newest first, capped); none open → the latest closed/merged one. */

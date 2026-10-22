@@ -344,18 +344,33 @@ test('an MR opened by a CLI call that prints only its id still shows, found by a
   await ui.unmount()
 })
 
-test('a Codeup MR link in a prompt pins that MR', async ($, on) => {
-  world(on, { branch: 'lonely' })
-  await $.prompt.submit({ text: `看下 https://codeup.aliyun.com/${ORG}/backend/demo-api/change/191` } as never)
+test('an MR only linked while investigating (prompt, command output, answer) is not shown; /mr <link> tracks one', async ($, on) => {
+  const link = `https://codeup.aliyun.com/${ORG}/backend/billing-svc/change/77`
+  world(on, { branch: 'lonely', toolText: `merged in ${link}` })
+  await $.prompt.submit({ text: `看下 ${link}` } as never)
+  await bash($, 'cd /tmp && git log --oneline | head')
+  await $.turn.complete(turn(`见 ${link}`))
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...BAND })
-  expect(await ui.find({ type: 'Link', text: '!191' })).toBeDefined()
+  expect(await ui.find({ type: 'Link', text: '!77' })).toBeUndefined()
+  await ui.unmount()
+  await $.command.run({ command: 'mr', args: link } as never)
+  const after = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...BAND })
+  expect(await after.find({ type: 'Link', text: '!77' })).toBeDefined()
+  await after.unmount()
+})
+
+test('a PR the session opens with gh pr create shows from its output', async ($, on) => {
+  world(on, { branch: 'lonely', toolText: 'https://github.com/acme/gh-app/pull/8\n' })
+  await bash($, 'gh pr create --fill')
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...BAND })
+  expect(await ui.find({ type: 'Link', text: '#8' })).toBeDefined()
   await ui.unmount()
 })
 
 test('a GitHub checkout the session works in shows its PR with the same checks, plus CI', async ($, on) => {
   const calls: string[] = []
   world(on, { calls })
-  await bash($, 'cd /w/gh-app && git status')
+  await bash($, 'cd /w/gh-app && git commit -am wip')
   await $.turn.complete(turn())
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...BAND })
   expect((await ui.find({ type: 'Link', text: '#7' }))?.props.href).toBe('https://github.com/acme/gh-app/pull/7')
@@ -371,7 +386,7 @@ test('a GitHub checkout the session works in shows its PR with the same checks, 
 test('a GitHub fetch that times out keeps the last PR rows and says so in one short line', async ($, on) => {
   const ghDown = { isOn: false }
   world(on, { ghDown })
-  await bash($, 'cd /w/gh-app && git status')
+  await bash($, 'cd /w/gh-app && git commit -am wip')
   await $.turn.complete(turn())
   ghDown.isOn = true
   await $.turn.complete(turn())
@@ -379,14 +394,6 @@ test('a GitHub fetch that times out keeps the last PR rows and says so in one sh
   expect(await ui.find({ type: 'Link', text: '#7' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'GitHub PR · acme/gh-app · 网络超时，显示上次结果，稍后重试' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'Post "https://api.github.com/graphql": net/http: TLS handshake timeout' })).toBeDefined()
-  await ui.unmount()
-})
-
-test('a GitHub PR link in a prompt pins that PR', async ($, on) => {
-  world(on, { branch: 'lonely' })
-  await $.prompt.submit({ text: '看下 https://github.com/acme/gh-app/pull/8' } as never)
-  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...BAND })
-  expect(await ui.find({ type: 'Link', text: '#8' })).toBeDefined()
   await ui.unmount()
 })
 
@@ -468,7 +475,7 @@ test('a fresh process resuming a session puts its saved releases, docs and pins 
   const deploy = { key: `demo-api/${ST}`, app: 'demo-api', workflowSn: WF, stageSn: ST, url: STAGE_URL, env: 'prod', triggeredAt: 0, number: '194', status: 'SUCCESS', stages: [] }
   const doc = { token: 'Doc0123456789abcdefABCD', url: DOC, kind: 'docx', origin: 'created', at: 0, title: '权限设计', isLookedUp: true }
   const store = new Map<string, unknown>([
-    [`session:${SESSION_ID}`, { savedAt: Date.parse('2026-10-15T09:00:00Z'), state: { deploys: [deploy], docs: [doc], mrPinned: [{ repoPath: 'acme/gh-app', localId: 8, forge: 'github' }] } }],
+    [`session:${SESSION_ID}`, { savedAt: Date.parse('2026-10-15T09:00:00Z'), state: { deploys: [deploy], docs: [doc], mrPinned: [{ repoPath: 'acme/gh-app', localId: 8, forge: 'github', via: 'tracked' }] } }],
     ['session:old', { savedAt: 0, state: { mrDirs: ['/w/x'] } }],
     ['session:done-1', { savedAt: Date.parse('2026-10-15T09:00:00Z'), state: { mrDirs: ['/w/y'] } }],
   ])

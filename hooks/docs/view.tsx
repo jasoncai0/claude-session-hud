@@ -35,7 +35,7 @@ export const docsLayout = (settings: Settings, bodyColumns: number): Settings =>
 export const visibleDocs = (list: readonly DocLink[], dismissed: readonly string[], settings: Settings): DocLink[] =>
   list.filter(d => !dismissed.includes(d.token) && (settings.docsMentioned || d.origin === 'created'))
 
-/** `/docs` output: one markdown line per document, linked. */
+/** `/doclinks` output: one markdown line per document, linked. */
 export function docList(list: readonly DocLink[]): string {
   const lines = list.map(d => `- ${ORIGINS[d.origin].label} · ${kindLabel(d.kind)} · [${docTitle(d)}](${d.url})`)
   return lines.length ? lines.join('\n') : '本会话还没有创建或提到飞书文档。'

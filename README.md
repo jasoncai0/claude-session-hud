@@ -124,13 +124,14 @@ claude plugin update session-hud@claude-session-hud
 
 Codeup 与 GitHub 用同一套行和检查项：Codeup MR 编号显示为 `!128`，GitHub PR 显示为 `#128`。
 
-**涉及哪些仓库**：当前工作目录所在仓库，加上会话中编辑过文件、或通过 `cd <dir>` / `git -C <dir>` 操作过的仓库（绝对路径或 `~/`），最多 100 个。识别 `origin` 指向 `codeup.aliyun.com` 或 `github.com` 的仓库（ssh / https 均可）。
+**涉及哪些仓库**：当前工作目录所在仓库，加上会话中编辑过文件、或通过 `cd <dir>` / `git -C <dir>` 做过 git 开发操作（commit / push / checkout / switch / merge / rebase / cherry-pick 等）的仓库（绝对路径或 `~/`），最多 100 个。排查时只读进入的仓库（`cd` 后 `ls` / `grep` / `git log`）不算。识别 `origin` 指向 `codeup.aliyun.com` 或 `github.com` 的仓库（ssh / https 均可）。
 
 **显示哪些 MR**：
 
 - 以上述仓库**当前分支**为源分支的 MR。有未关闭的就显示未关闭的（同一分支合往多个目标分支时各一行，最多 100 条）；全部已关闭时显示最近一条已合并 / 已关闭的。
-- **本会话创建的 MR**，无论在哪个目录、哪个分支创建：识别到创建 MR 的调用（`codeup-create-change-request`、对 `changeRequests` 接口的 POST、`git push -o merge_request.create`）后，按「作者 = 当前令牌所属用户、创建时间不早于这次调用」查出新建的 MR 并固定显示。不依赖调用的输出格式。
-- **提到的 MR / PR**：消息、Claude 的回答或命令输出里出现的 Codeup MR 链接（`https://codeup.aliyun.com/…/change/<编号>`）或 GitHub PR 链接（`https://github.com/<owner>/<repo>/pull/<编号>`）。`gh pr create` 会输出新 PR 的链接，因此本会话创建的 PR 也会自动出现。
+- **本会话创建的 MR / PR**，无论在哪个目录、哪个分支创建：识别到创建调用（`codeup-create-change-request`、对 `changeRequests` 接口的 POST、`git push -o merge_request.create`、`gh pr create`、对 `pulls` 接口的 POST）后，取调用输出里的链接；Codeup 另按「作者 = 当前令牌所属用户、创建时间不早于这次调用」查出新建的 MR，不依赖输出格式。
+- **手动跟踪的 MR / PR**：执行 `/mr <MR 或 PR 链接>`。
+- **只是被提到的 MR / PR 不显示**：消息、Claude 的回答、命令输出（搜索、日志、排查）里出现的链接不会自动加入，避免干扰。需要看就用 `/mr <链接>`。旧版本因「提到」而加入的 MR 升级后不再显示。
 
 | 列 | 说明 |
 | --- | --- |
@@ -178,7 +179,7 @@ GitHub PR 的状态与 Codeup 对齐：草稿 → 草稿；已获批准且可直
 
 **每行**：类型图标 · 类型（文档 / 知识库 / 表格 / 多维表 / 脑图 / 幻灯片 / 文件）· 创建 / 提及 · **标题（点击打开，悬停看全）** · `×`。类型和「创建 / 提及」分别对齐 MR 行的编号列与状态列。
 
-**标题从哪来**：每轮结束后在后台调用 `lark-cli drive +inspect` 查询，wiki 节点会解析到实际文档。查到标题或确认无权限后不再查；超时等临时失败会在之后的轮次重试，最多 3 次（`/docs` 也会触发重试）。查到之前先显示链接文字（如 `[设计方案](https://…)` 中的「设计方案」），否则显示「类型 + token 前缀」。
+**标题从哪来**：每轮结束后在后台调用 `lark-cli drive +inspect` 查询，wiki 节点会解析到实际文档。查到标题或确认无权限后不再查；超时等临时失败会在之后的轮次重试，最多 3 次（`/doclinks` 也会触发重试）。查到之前先显示链接文字（如 `[设计方案](https://…)` 中的「设计方案」），否则显示「类型 + token 前缀」。
 
 **Claude Artifacts**（类型显示为 `Claude`，图标 `✦`）：
 
@@ -244,8 +245,9 @@ GitHub PR 的状态与 Codeup 对齐：草稿 → 草稿；已获批准且可直
 | `/hud usage\|mr\|docs\|deploy on\|off` | 启停模块（写入插件配置，立即生效，新会话沿用） |
 | `/hud fold` / `/hud unfold` | 折叠 / 展开本会话的 HUD |
 | `/hud set <配置项> <值>` | 修改任一配置，如 `/hud set mrSourceWidth 30`、`/hud set collapsed on` |
-| `/mr` | 以 markdown 链接列出本会话所有 MR |
-| `/docs` | 以 markdown 链接列出本会话所有文档（顺带重试未取到的标题） |
+| `/mr` | 以 markdown 链接列出本会话所有 MR / PR |
+| `/mr <MR / PR 链接>` | 跟踪该 MR / PR（仅被提到的链接不会自动显示） |
+| `/doclinks` | 以 markdown 链接列出本会话所有文档（顺带重试未取到的标题）；Claude Code 2.1.304 起自带 `/docs`，故改名 |
 | `/deploys` | 刷新并列出本会话的所有发布：状态、执行序号、AppStack 链接、当前任务 |
 | `/deploys <阶段链接>` | 跟踪该 AppStack 阶段的最新一次执行（不发布） |
 
@@ -302,7 +304,7 @@ Desktop 的 Code 标签页没有 `/config`，用 `/hud set` 修改；终端里�
 | GitHub 仓库显示「未找到 gh CLI」或报错 | 安装 `gh` 并执行 `gh auth login`；私有仓库需要 `repo` 权限 |
 | 显示「未找到云效 token」 | 按[依赖](#依赖)配置 token |
 | 没有 MR 行 | 仓库 origin 不在 Codeup 上；当前分支没有 MR；或该 MR 不在仓库最新的 100 条之内。在别处创建的 MR，可以在消息里贴它的链接 |
-| 文档只显示「文档 xxxxxxxx…」 | 未安装或未登录 `lark-cli`（终端执行 `lark-cli auth login`），或无该文档权限；临时失败会自动重试，也可执行 `/docs` 立即重试 |
+| 文档只显示「文档 xxxxxxxx…」 | 未安装或未登录 `lark-cli`（终端执行 `lark-cli auth login`），或无该文档权限；临时失败会自动重试，也可执行 `/doclinks` 立即重试 |
 | 发布行一直是「等待运行开始」 | 该阶段还没有新的执行（触发被排队或失败），点「检查」重查；或触发时间与执行开始时间相差超过 2 分钟 |
 | MR / 发布下方出现一行报错 | 格式为「GitHub PR / Codeup MR · 仓库 · 原因」，鼠标悬停看原始报错。网络超时、限流、服务端 5xx 属临时失败：保留上次结果，下次轮询自动重试；「无权限」「未登录或凭证失效」「不存在或无权限」需检查 token / `gh auth status` |
 | 发布行显示「查询失败」 | 令牌没有 AppStack 读权限，或组织 ID 不对，见[依赖](#依赖)；临时网络失败时继续显示上次读到的进度 |
@@ -353,6 +355,7 @@ claude plugin test .
 
 ## 更新记录
 
+- **0.10.0**：MR / PR 只显示本会话开发的分支、本会话创建的、以及 `/mr <链接>` 手动跟踪的；消息 / 回答 / 命令输出里只是被提到的链接不再自动显示，排查时只读进入的仓库也不再算入。`/docs` 改名 `/doclinks`（Claude Code 2.1.304 自带 `/docs`，同名注册会被拒绝并导致启动钩子被跳过）；命令改为逐个注册，一个失败不影响其余
 - **0.9.2**：文档「创建 / 提及」更准：会话启动时在后台从 transcript 补回丢失的「创建」标记（重启或分叉后被误标为「提及」的文档）；合并分叉存档时，任一方是「创建」就保留「创建」
 - **0.9.1**：修复 Desktop 中回退 / 编辑历史消息后 HUD 内容丢失：这类操作以新会话 ID 分叉继续，存档改为同时记录会话首条消息 uuid（分叉后不变），恢复时合并同一谱系的存档并迁移到新 ID
 - **0.9.0**：用量模块新增上下文窗口用量（`上下文 ███░░░ 42% 84k/200k`），新增配置 `usageContext`

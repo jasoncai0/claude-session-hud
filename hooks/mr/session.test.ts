@@ -11,11 +11,13 @@ const mr = (repo: string, id: number, state: string, fail = false): MrView => ({
 const repo = (name: string, mrs: MrView[]): RepoView => ({ root: `/w/${name}`, repo: name, branch: 'feat', mrs })
 
 
-test('dirsOf reads edited files and Bash cd / git -C targets', () => {
+test('dirsOf reads edited files and the cd / git -C targets of git work; a repo only read is not the session\'s', () => {
   expect(dirsOf('Edit', { file_path: '/w/demo-api/src/A.java' }, '/Users/me')).toEqual(['/w/demo-api/src'])
   expect(dirsOf('Read', { file_path: '/w/demo-api/src/A.java' }, '/Users/me')).toEqual([])
   expect(dirsOf('Bash', { command: 'cd ~/workspace/billing-svc && git push; git -C "/w/a b" status' }, '/Users/me'))
     .toEqual(['/Users/me/workspace/billing-svc', '/w/a b'])
+  expect(dirsOf('Bash', { command: 'cd /w/other && git log --oneline && grep -r foo .' }, '/Users/me')).toEqual([])
+  expect(dirsOf('Bash', { command: 'git -C /w/other checkout -b feat/x' }, '/Users/me')).toEqual(['/w/other'])
   expect(dirsOf('Bash', { command: 'cd relative && ls' }, '/Users/me')).toEqual([])
 })
 
