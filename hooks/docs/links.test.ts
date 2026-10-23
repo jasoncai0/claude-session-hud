@@ -71,6 +71,13 @@ test('lookupOf: a title or no access is final; a timeout or other failure is ret
   expect(lookupOf({ exitCode: 3, stdout: '', stderr: 'Inspecting wiki node\n{"ok":false,"error":{"type":"authorization","subtype":"permission_denied"}}' })).toEqual({ final: '无权限' })
   expect('retry' in lookupOf({ exitCode: 1, stdout: '', stderr: 'network unreachable' })).toBe(true)
   expect(lookupOf({ failed: 'timed out' })).toEqual({ retry: 'timed out' })
+  // A made-up or deleted link: final, never retried (and so never logged).
+  const notFound = 'Inspecting wiki node: Move...90ab\n' + JSON.stringify({ ok: false, error: { type: 'api', subtype: 'not_found', code: 131005, message: 'resolve wiki node failed: not found' } }, null, 2)
+  expect(lookupOf({ exitCode: 1, stdout: notFound, stderr: '' })).toEqual({ final: '不存在' })
+  // Any other failure says the CLI's own message, not the JSON's closing braces.
+  const apiDown = JSON.stringify({ ok: false, error: { type: 'api', subtype: 'internal', message: 'upstream 502' } }, null, 2)
+  expect(lookupOf({ exitCode: 1, stdout: apiDown, stderr: '' })).toEqual({ retry: 'lark-cli exit 1: upstream 502' })
+  expect(lookupOf({ exitCode: 1, stdout: '', stderr: 'dial tcp: i/o timeout\n}' })).toEqual({ retry: 'lark-cli exit 1: dial tcp: i/o timeout' })
 })
 
 test('titleOf reads lark-cli +inspect JSON and tolerates failures', () => {
