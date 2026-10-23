@@ -33,7 +33,7 @@ export const docsLayout = (settings: Settings, bodyColumns: number): Settings =>
 
 /** The documents the band shows: not dismissed, and mentions only while `docsMentioned` is on. */
 export const visibleDocs = (list: readonly DocLink[], dismissed: readonly string[], settings: Settings): DocLink[] =>
-  list.filter(d => !dismissed.includes(d.token) && (settings.docsMentioned || d.origin === 'created'))
+  list.filter(d => !dismissed.includes(d.token) && !(d.aliases ?? []).some(a => dismissed.includes(a)) && (settings.docsMentioned || d.origin === 'created'))
 
 /** `/doclinks` output: one markdown line per document, linked. */
 export function docList(list: readonly DocLink[]): string {

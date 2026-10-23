@@ -106,6 +106,43 @@ export function isLarkTool(tool: string, input: { command?: unknown }): boolean 
  * Adds what was found, newest first: `created` outranks `mentioned`, a looked-up title is never replaced, and only
  * mentions are dropped past the cap.
  */
+/** Every token a row answers to: its link's, its document's own, and the links folded into it. */
+const namesOf = (d: DocLink): string[] => [d.token, ...(d.docToken ? [d.docToken] : []), ...(d.aliases ?? [])]
+
+/**
+ * One row per document: rows that share a token (a docx link and the wiki node it was moved under, once the lookup
+ * unwrapped the node) become one, where the first of them stood. The wiki link is kept (where the doc lives now), made
+ * if either was made, with every other token as an alias so a later mention or a dismissal of either finds it.
+ * ponytail: O(n²) over the session's docs (a hundred or so).
+ */
+export function foldSameDoc(list: readonly DocLink[]): DocLink[] {
+  const groups: DocLink[][] = []
+  for (const d of list) {
+    const names = new Set(namesOf(d))
+    const group = groups.find(g => g.some(o => namesOf(o).some(n => names.has(n))))
+    if (group) group.push(d)
+    else groups.push([d])
+  }
+  return groups.map(g => {
+    if (g.length === 1) return g[0] as DocLink
+    const base = g.find(d => d.kind === 'wiki') ?? (g[0] as DocLink)
+    const aliases = [...new Set(g.flatMap(namesOf))].filter(n => n !== base.token && n !== base.docToken)
+    const title = base.title ?? g.find(d => d.title)?.title
+    const label = base.label ?? g.find(d => d.label)?.label
+    const docToken = base.docToken ?? g.find(d => d.docToken)?.docToken
+    return {
+      ...base,
+      origin: g.some(d => d.origin === 'created') ? 'created' : base.origin,
+      at: Math.max(...g.map(d => d.at)),
+      ...(title ? { title } : {}),
+      ...(label ? { label } : {}),
+      ...(docToken ? { docToken } : {}),
+      ...(g.some(d => d.isLookedUp) ? { isLookedUp: true } : {}),
+      ...(aliases.length ? { aliases } : {}),
+    }
+  })
+}
+
 export function mergeDocs(known: readonly DocLink[], found: readonly FoundDoc[], origin: DocOrigin, now: number): DocLink[] {
   const byToken = new Map(known.map(d => [d.token, d]))
   const fresh = found.map((f): DocLink => {
@@ -126,7 +163,7 @@ export function mergeDocs(known: readonly DocLink[], found: readonly FoundDoc[],
     }
   })
   const tokens = new Set(fresh.map(d => d.token))
-  const all = [...fresh, ...known.filter(d => !tokens.has(d.token))]
+  const all = foldSameDoc([...fresh, ...known.filter(d => !tokens.has(d.token))])
   const keptMentions = new Set(all.filter(d => d.origin === 'mentioned').slice(0, LIST_MAX).map(d => d.token))
   return all.filter(d => d.origin === 'created' || keptMentions.has(d.token))
 }

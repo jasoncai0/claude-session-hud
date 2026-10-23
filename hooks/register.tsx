@@ -5,7 +5,7 @@ import type { DeployRun, DocLink, DocOrigin, MrView, RepoView, SessionView, Usag
 import { addRun, envOfStage, findStageTargets, isSettled, isUnnamed, pickExecution, pipelineLabel, runOf, stageOfPipeline, stageUrl, triggersOf } from './deploy/parse'
 import type { ApiPipelineRun } from './deploy/parse'
 import { deployList, deploySection } from './deploy/view'
-import { artifactsOfCall, findAllDocs, findDocs, htmlTitle, isCreation, isLarkTool, mergeDocs } from './docs/links'
+import { artifactsOfCall, findAllDocs, findDocs, foldSameDoc, htmlTitle, isCreation, isLarkTool, mergeDocs } from './docs/links'
 import type { FoundDoc } from './docs/links'
 import { CREATION_LINES_RE, createdInTranscript } from './docs/backfill'
 import { LARK_CLI, inspectArgv, isMissingProgram, lookupOf } from './docs/lookup'
@@ -433,7 +433,8 @@ async function lookupTitle($: EngineInterface, url: string): Promise<Lookup> {
 /** Looks up the titles still missing, a few per turn; a document is retried a few times, then given up. */
 async function lookupTitles($: EngineInterface) {
   const pending = listOf<DocLink>(await read($, docs))
-    .filter(d => !d.title && !d.isLookedUp && (d.lookupTries ?? 0) < MAX_LOOKUP_TRIES && !lookingUp.has(d.token))
+    // A wiki node is looked up until it is unwrapped, even with a title: that is how a moved doc's two links meet.
+    .filter(d => ((!d.title && !d.isLookedUp) || (d.kind === 'wiki' && !d.docToken)) && (d.lookupTries ?? 0) < MAX_LOOKUP_TRIES && !lookingUp.has(d.token))
     .slice(0, LOOKUPS_PER_TURN)
   if (!pending.length) return
   pending.forEach(d => lookingUp.add(d.token))
@@ -442,13 +443,15 @@ async function lookupTitles($: EngineInterface) {
   results.forEach((r, token) => {
     if ('retry' in r) $.ui.log(`${PLUGIN} docs: 标题查询失败（将重试）${token.slice(0, 8)}…: ${r.retry}`)
   })
-  await update($, docs, list => listOf<DocLink>(list).map(d => {
+  await update($, docs, list => foldSameDoc(listOf<DocLink>(list).map(d => {
     const r = results.get(d.token)
     if (!r) return d
-    if ('title' in r) return { ...d, title: r.title, isLookedUp: true }
-    if ('final' in r) return { ...d, isLookedUp: true }
+    // A wiki node keeps its unwrapped token (its own when none came back, so it is not asked again).
+    const unwrapped = d.kind === 'wiki' ? { docToken: ('title' in r ? r.token : undefined) ?? d.token } : {}
+    if ('title' in r) return { ...d, title: r.title, isLookedUp: true, ...unwrapped }
+    if ('final' in r) return { ...d, isLookedUp: true, ...unwrapped }
     return { ...d, lookupTries: (d.lookupTries ?? 0) + 1 }
-  }))
+  })))
 }
 
 // ── Yunxiao deploys ─────────────────────────────────────────────────────────────────────────────────────────────

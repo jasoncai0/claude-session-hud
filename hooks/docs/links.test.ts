@@ -2,8 +2,8 @@ import { expect, test } from 'claude-code/testing'
 
 import type { DocLink } from '../../types'
 import { LIST_MAX } from '../settings'
-import { artifactsOfCall, findAllDocs, findArtifacts, findDocs, htmlTitle, isCreation, isLarkTool, mergeDocs } from './links'
-import { inspectArgv, isMissingProgram, lookupOf, titleOf } from './lookup'
+import { artifactsOfCall, findAllDocs, findArtifacts, findDocs, foldSameDoc, htmlTitle, isCreation, isLarkTool, mergeDocs } from './links'
+import { inspectArgv, isMissingProgram, lookupOf, titleOf, tokenOf } from './lookup'
 
 const DOCX = 'https://acme.feishu.cn/docx/Doc0123456789abcdefABCD'
 const WIKI = 'https://acme.larksuite.com/wiki/Wk1234567890abcd?from=share#h1'
@@ -115,4 +115,23 @@ test('htmlTitle reads a page title; an artifact merges as looked up, keeping a t
   expect(htmlTitle('<html></html>')).toBe(undefined)
   const merged = mergeDocs([], [{ token: 'a1b2c3d4e5', kind: 'artifact', url: ART, title: 'T' }], 'created', 1)
   expect(merged[0]).toEqual({ token: 'a1b2c3d4e5', url: ART, kind: 'artifact', origin: 'created', at: 1, title: 'T', isLookedUp: true })
+})
+
+test('foldSameDoc: a docx made here and the wiki node it was moved under are one row, kept as the wiki link, made', () => {
+  const docx: DocLink = { token: 'DocX', url: 'u/docx/DocX', kind: 'docx', origin: 'created', at: 1, title: 'T', isLookedUp: true }
+  const wiki: DocLink = { token: 'WikiN', url: 'u/wiki/WikiN', kind: 'wiki', origin: 'mentioned', at: 5, title: 'T', isLookedUp: true, docToken: 'DocX' }
+  const other: DocLink = { token: 'Other', url: 'u/docx/Other', kind: 'docx', origin: 'mentioned', at: 3 }
+  const folded = foldSameDoc([wiki, other, docx])
+  expect(folded.map(d => `${d.kind}:${d.token}:${d.origin}`)).toEqual(['wiki:WikiN:created', 'docx:Other:mentioned'])
+  expect(folded[0]?.docToken).toBe('DocX')
+  expect(foldSameDoc([docx, other])).toHaveLength(2)
+  // A later mention of the docx link finds the folded row by its alias / doc token, not a new row.
+  const again = mergeDocs(folded, [{ token: 'DocX', url: 'u/docx/DocX', kind: 'docx' }], 'mentioned', 9)
+  expect(again.map(d => d.token)).toEqual(['WikiN', 'Other'])
+})
+
+test('tokenOf reads the unwrapped document token from +inspect', () => {
+  expect(tokenOf(JSON.stringify({ ok: true, data: { title: 't', token: 'JFeW', wiki_node: { node_token: 'U5eS' } } }))).toBe('JFeW')
+  expect(tokenOf('not json')).toBe(undefined)
+  expect(lookupOf({ exitCode: 0, stdout: JSON.stringify({ ok: true, data: { title: 't', token: 'JFeW' } }), stderr: '' })).toEqual({ title: 't', token: 'JFeW' })
 })

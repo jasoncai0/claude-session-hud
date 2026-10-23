@@ -57,6 +57,13 @@ export type DocLink = {
   isLookedUp?: boolean
   /** Lookups that failed in a way worth retrying (timeouts, network); given up after a few. */
   lookupTries?: number
+  /**
+   * The document's own token, from the lookup: a wiki node's unwrapped docx. A doc made as docx and moved into a wiki
+   * is linked both ways; this is what tells the two links apart as one document.
+   */
+  docToken?: string
+  /** The other links' tokens folded into this row as the same document. */
+  aliases?: string[]
 }
 
 /** One job of a release-stage run, as the run page lists it. */

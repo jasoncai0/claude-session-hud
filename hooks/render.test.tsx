@@ -77,8 +77,12 @@ function world(on: On, { cwd = '/w/demo-api/src', branch = 'feat', calls = [], e
         larkTimeouts.left -= 1
         throw new Error('timed out after 8000ms')
       }
-      const title = String(e.argv[4]).includes('NewDoc') ? '新建的设计文档' : '权限设计（正式标题）'
-      return { value: { exitCode: 0, stdout: JSON.stringify({ ok: true, data: { title } }), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+      const url = String(e.argv[4])
+      // The wiki node a doc made here was moved under unwraps to that doc's own token.
+      const isMoved = url.includes('/wiki/MovedNode')
+      const title = url.includes('NewDoc') || isMoved ? '新建的设计文档' : '权限设计（正式标题）'
+      const data = isMoved ? { title, token: 'NewDoc1234567890abcd' } : { title }
+      return { value: { exitCode: 0, stdout: JSON.stringify({ ok: true, data }), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     }
     if (e.argv[0] === '/bin/sh') {
       const isRootLookup = String(e.argv[2]).includes('/projects/')
@@ -572,6 +576,23 @@ test('a command name another plugin already has falls back to session-<name>, qu
   expect(calls.filter(c => c.startsWith('log'))).toEqual([])
   const out = await $.command.run({ command: 'session-hud', args: '' } as never) as { text?: string }
   expect(out.text).toContain('**session-hud**')
+})
+
+test('a doc made here and later linked by the wiki node it was moved under shows once, as made, linking the wiki', async ($, on) => {
+  const wiki = 'https://acme.feishu.cn/wiki/MovedNode1234567890ab'
+  const clock = world(on, { toolText: `ok ${MADE}` })
+  await bash($, 'lark-cli docs +create --content x')
+  await $.turn.complete(turn())
+  await clock.advance(1)
+  await $.prompt.submit({ text: `移到知识库了：${wiki}` } as never)
+  await $.turn.complete(turn())
+  await clock.advance(1)
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...BAND })
+  const links = await ui.findAll({ type: 'Link', text: '新建的设计文档' })
+  expect(links.map(l => l.props.href)).toEqual([wiki])
+  expect(await ui.find({ type: 'Text', text: '创建' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '提及' })).toBeUndefined()
+  await ui.unmount()
 })
 
 test('deploy off: a deploy.sh run is not tracked', { options: { deploy: false, mr: false } }, async ($, on) => {

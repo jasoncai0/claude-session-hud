@@ -14,7 +14,7 @@ export function inspectArgv(bin: string, url: string): string[] {
 export const isMissingProgram = (err: unknown): boolean => /ENOENT|not found|no such file/i.test(err instanceof Error ? err.message : String(err))
 
 /** What one lookup came to: a title; a final no (no access, no such doc); or a failure worth trying again later. */
-export type Lookup = { title: string } | { final: string } | { retry: string }
+export type Lookup = { title: string; token?: string } | { final: string } | { retry: string }
 
 /**
  * Reads one `lark-cli drive +inspect` run. An exit with an authorization error (no access) or a success without a
@@ -24,11 +24,22 @@ export function lookupOf(run: { exitCode: number; stdout: string; stderr: string
   if ('failed' in run) return { retry: run.failed }
   if (run.exitCode === 0) {
     const title = titleOf(run.stdout)
-    return title ? { title } : { final: '无标题' }
+    const token = tokenOf(run.stdout)
+    return title ? { title, ...(token ? { token } : {}) } : { final: '无标题' }
   }
   const text = `${run.stderr}\n${run.stdout}`
   if (/"type"\s*:\s*"authorization"|permission/i.test(text)) return { final: '无权限' }
   return { retry: `lark-cli exit ${run.exitCode}: ${text.trim().split('\n').slice(-3).join(' ').slice(0, 160)}` }
+}
+
+/** Pulls `data.token` (the document's own, a wiki node unwrapped) out of `lark-cli drive +inspect` JSON. */
+export function tokenOf(stdout: string): string | undefined {
+  try {
+    const token = (JSON.parse(stdout) as { data?: { token?: unknown } }).data?.token
+    return typeof token === 'string' && token ? token : undefined
+  } catch {
+    return undefined
+  }
 }
 
 /** Pulls `data.title` out of `lark-cli drive +inspect` JSON; undefined when the call failed or has none. */
