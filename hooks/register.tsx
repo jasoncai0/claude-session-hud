@@ -917,7 +917,7 @@ export const register: Register = (on, options) => {
     const below = await next(e)
     const mine = isCardUp
       ? band(ui, sections, true)
-      : band(ui, sections, isCollapsed, () => void update($, collapsed, cur => !(cur ?? settings.collapsed)))
+      : band(ui, sections, isCollapsed, () => void update($, collapsed, cur => !(cur ?? settings.collapsed)), e.surface !== 'terminal')
     if (isBlank(below)) return mine
     return (
       <ui.Box flexDirection="column">

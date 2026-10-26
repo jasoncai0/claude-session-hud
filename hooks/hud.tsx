@@ -47,8 +47,11 @@ export function parseHud(args: string): HudCommand {
  * The band: every enabled module's rows under one fold toggle, or folded, one summary row. Without `onToggle` it is the
  * summary alone with no control in it: what shows above a card holding the band, which owns the keys and clicks there.
  */
-export function band(ui: Ui, sections: readonly Section[], isCollapsed: boolean, onToggle?: () => void): RenderElement {
+export function band(ui: Ui, sections: readonly Section[], isCollapsed: boolean, onToggle?: () => void, isNativeButton = false): RenderElement {
   const { Box, Button, Text } = ui
+  // A desktop draws every Button as its native button (Claude Code 2.1.308 on): one in the 2-cell column loses its
+  // label to the padding, so there it sits at the end of the first row, worded like the other folds.
+  if (isNativeButton && onToggle) return nativeBand(ui, sections, isCollapsed, onToggle)
   const toggle = onToggle ? (
     <Box key="hud-toggle" width={TOGGLE_W} flexShrink={0}>
       <Button key="hud-fold" plain dimColor label={isCollapsed ? '▸' : '▾'} onPress={onToggle} />
@@ -70,6 +73,38 @@ export function band(ui: Ui, sections: readonly Section[], isCollapsed: boolean,
         <Box key={`hud-row-${i}`} flexDirection="row">
           {i === 0 ? toggle : gap(ui, `hud-pad-${i}`, TOGGLE_W)}
           <Box flexGrow={1} flexDirection="column">{r}</Box>
+        </Box>
+      ))}
+    </Box>
+  )
+}
+
+/** The band where Buttons are native: the same rows, the fold a `⌃ 收起` / `⌄ 展开` button closing the first row. */
+function nativeBand(ui: Ui, sections: readonly Section[], isCollapsed: boolean, onToggle: () => void): RenderElement {
+  const { Box, Button, Text } = ui
+  const toggle = (
+    <Box key="hud-toggle" flexShrink={0}>
+      <Button key="hud-fold" dimColor label={isCollapsed ? '⌄ 展开' : '⌃ 收起'} onPress={onToggle} />
+    </Box>
+  )
+  if (isCollapsed) {
+    const parts = sections.flatMap((s, i) => (i === 0 ? s.summary : [<Text key={`hud-sep-${i}`} dimColor>·</Text>, ...s.summary]))
+    return (
+      <Box key="hud" height={1} flexWrap="nowrap">
+        {gap(ui, 'hud-pad', TOGGLE_W)}
+        <Box flexGrow={1} flexWrap="nowrap" overflow="hidden" columnGap={1}>{parts}</Box>
+        {toggle}
+      </Box>
+    )
+  }
+  const rows = sections.flatMap(s => s.rows)
+  return (
+    <Box key="hud" flexDirection="column">
+      {rows.map((r, i) => (
+        <Box key={`hud-row-${i}`} flexDirection="row">
+          {gap(ui, `hud-pad-${i}`, TOGGLE_W)}
+          <Box flexGrow={1} flexDirection="column">{r}</Box>
+          {i === 0 ? toggle : null}
         </Box>
       ))}
     </Box>
