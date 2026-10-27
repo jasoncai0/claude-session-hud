@@ -192,11 +192,11 @@ for (const surface of ['terminal', 'desktop'] as const) {
     await $.turn.complete(turn(`见 ${DOC}`))
     const ui = await $.ui.mount({ plugin: PLUGIN, surface, ...BAND })
     expect(await ui.find({ type: 'Text', text: '待合并' })).toBeDefined()
-    // A desktop draws Buttons natively: the fold is a worded button at the first row's end, not a glyph in a 2-cell column.
-    expect((await ui.find({ type: 'Button', key: 'hud-fold' }))?.props.label).toBe(surface === 'desktop' ? '⌃ 收起' : '▾')
+    // The same one-glyph fold on every surface; a desktop's native button sits at the first row's end, not in the 2-cell column.
+    expect((await ui.find({ type: 'Button', key: 'hud-fold' }))?.props.label).toBe('▾')
     await ui.press({ key: 'hud-fold' })
     expect(await ui.find({ type: 'Text', text: '待合并' })).toBeUndefined()
-    expect((await ui.find({ type: 'Button', key: 'hud-fold' }))?.props.label).toBe(surface === 'desktop' ? '⌄ 展开' : '▸')
+    expect((await ui.find({ type: 'Button', key: 'hud-fold' }))?.props.label).toBe('▸')
     expect(await ui.find({ type: 'Text', text: '⑂!191' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: '42%' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: '文档 1' })).toBeDefined()

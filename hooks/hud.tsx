@@ -50,7 +50,7 @@ export function parseHud(args: string): HudCommand {
 export function band(ui: Ui, sections: readonly Section[], isCollapsed: boolean, onToggle?: () => void, isNativeButton = false): RenderElement {
   const { Box, Button, Text } = ui
   // A desktop draws every Button as its native button (Claude Code 2.1.308 on): one in the 2-cell column loses its
-  // label to the padding, so there it sits at the end of the first row, worded like the other folds.
+  // glyph to the padding, so there the same glyph sits at the end of the first row.
   if (isNativeButton && onToggle) return nativeBand(ui, sections, isCollapsed, onToggle)
   const toggle = onToggle ? (
     <Box key="hud-toggle" width={TOGGLE_W} flexShrink={0}>
@@ -79,12 +79,12 @@ export function band(ui: Ui, sections: readonly Section[], isCollapsed: boolean,
   )
 }
 
-/** The band where Buttons are native: the same rows, the fold a `⌃ 收起` / `⌄ 展开` button closing the first row. */
+/** The band where Buttons are native: the same rows, the fold's `▾` / `▸` button closing the first row. */
 function nativeBand(ui: Ui, sections: readonly Section[], isCollapsed: boolean, onToggle: () => void): RenderElement {
   const { Box, Button, Text } = ui
   const toggle = (
     <Box key="hud-toggle" flexShrink={0}>
-      <Button key="hud-fold" dimColor label={isCollapsed ? '⌄ 展开' : '⌃ 收起'} onPress={onToggle} />
+      <Button key="hud-fold" dimColor label={isCollapsed ? '▸' : '▾'} onPress={onToggle} />
     </Box>
   )
   if (isCollapsed) {
