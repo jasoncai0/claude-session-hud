@@ -192,6 +192,8 @@ for (const surface of ['terminal', 'desktop'] as const) {
     await $.turn.complete(turn(`见 ${DOC}`))
     const ui = await $.ui.mount({ plugin: PLUGIN, surface, ...BAND })
     expect(await ui.find({ type: 'Text', text: '待合并' })).toBeDefined()
+    // A row's × hides that row only: role="dismiss" would have a desktop draw it at the band's edge, out of the row.
+    expect((await ui.find({ type: 'Button', key: 'dismiss-backend/demo-api!191' }))?.props.role).toBeUndefined()
     // The same one-glyph fold on every surface; a desktop's native button sits at the first row's end, not in the 2-cell column.
     expect((await ui.find({ type: 'Button', key: 'hud-fold' }))?.props.label).toBe('▾')
     await ui.press({ key: 'hud-fold' })

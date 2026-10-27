@@ -117,7 +117,7 @@ function row(ui: Ui, mr: MrView, settings: Settings, isOpen: boolean, act: MrAct
         <Box flexGrow={1} />
         {settings.mrStats ? statsCell(ui, mr) : null}
         {settings.mrChecks ? checksCell(ui, mr, isOpen, act) : null}
-        <Button key={`dismiss-${key}`} role="dismiss" plain label="×" dimColor onPress={() => act.dismiss(key)} />
+        <Button key={`dismiss-${key}`} plain label="×" dimColor onPress={() => act.dismiss(key)} />
       </Box>
       {isOpen && settings.mrChecks ? checksList(ui, mr, act) : null}
     </Box>

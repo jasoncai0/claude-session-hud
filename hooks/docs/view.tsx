@@ -55,7 +55,7 @@ function row(ui: Ui, d: DocLink, settings: Settings, dismiss: (token: string) =>
       {cell(ui, { key: `doc-origin-${d.token}`, text: o.label, width: STATE_W, color: o.tone, dimColor: o.isDim })}
       {cell(ui, { key: `doc-title-${d.token}`, text: docTitle(d), width: settings.docsTitleWidth, href: d.url })}
       <Box flexGrow={1} />
-      <Button key={`doc-dismiss-${d.token}`} role="dismiss" plain label="×" dimColor onPress={() => dismiss(d.token)} />
+      <Button key={`doc-dismiss-${d.token}`} plain label="×" dimColor onPress={() => dismiss(d.token)} />
     </Box>
   )
 }

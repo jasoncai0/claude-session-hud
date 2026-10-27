@@ -75,7 +75,7 @@ function row(ui: Ui, r: DeployRun, settings: Settings, isOpen: boolean, act: Dep
             <Text color={sum.tone}>{sum.glyph}</Text> 检查 {isOpen ? '⌃' : '⌄'}
           </Button>
         </Box>
-        <Button key={`deploy-dismiss-${r.key}`} role="dismiss" plain label="×" dimColor onPress={() => act.dismiss(r.key)} />
+        <Button key={`deploy-dismiss-${r.key}`} plain label="×" dimColor onPress={() => act.dismiss(r.key)} />
       </Box>
       {isOpen ? jobList(ui, r, settings, act) : null}
     </Box>
