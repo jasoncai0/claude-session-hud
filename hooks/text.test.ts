@@ -14,6 +14,13 @@ test('fit leaves short text alone and cuts long text at the end', () => {
   expect(displayWidth(fit('feature/user-profile-api', 10))).toBe(10)
 })
 
+test('fit name keeps the last path segment when the whole path is cut', () => {
+  expect(fit('ai-infra/agent-websocket', 24, 'name')).toBe('ai-infra/agent-websocket')
+  expect(fit('backend/demo-api', 9, 'name')).toBe('demo-api')
+  expect(fit('ai-infra/agent-websocket', 9, 'name')).toBe('agent-we…')
+  expect(fit('plain-repo-name', 9, 'name')).toBe('plain-re…')
+})
+
 test('fit middle keeps both ends', () => {
   expect(fit('feature/user-profile-board', 21, 'middle')).toBe('feature/us…file-board')
   expect(displayWidth(fit('feature/user-profile-board', 21, 'middle'))).toBe(21)

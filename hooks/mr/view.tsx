@@ -110,7 +110,7 @@ function row(ui: Ui, mr: MrView, settings: Settings, isOpen: boolean, act: MrAct
         <Box width={ICON_W} flexShrink={0}>{icon(ui, mr)}</Box>
         <Box width={ID_W} flexShrink={0}><Link href={mr.url} label={mrRef(mr)} /></Box>
         {cell(ui, { key: `mr-state-${key}`, text: s.label, width: STATE_W, color: s.tone })}
-        {settings.mrRepo ? cell(ui, { key: `mr-repo-${key}`, text: mr.repo, width: settings.mrRepoWidth, dimColor: true }) : null}
+        {settings.mrRepo ? cell(ui, { key: `mr-repo-${key}`, text: mr.repo, width: settings.mrRepoWidth, mode: 'name', dimColor: true }) : null}
         {cell(ui, { key: `mr-src-${key}`, text: mr.source, width: settings.mrSourceWidth, mode: 'middle', dimColor: true })}
         <Text dimColor>→</Text>
         {cell(ui, { key: `mr-tgt-${key}`, text: mr.target, width: settings.mrTargetWidth, mode: 'middle', dimColor: true })}

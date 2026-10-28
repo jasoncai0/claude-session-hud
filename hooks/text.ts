@@ -30,11 +30,15 @@ function take(chars: readonly string[], width: number): string[] {
   return out
 }
 
-export type FitMode = 'end' | 'middle'
+export type FitMode = 'end' | 'middle' | 'name'
 
-/** `s` cut to `width` cells with an ellipsis at the end, or in the middle to keep both ends. */
+/**
+ * `s` cut to `width` cells with an ellipsis at the end, or in the middle to keep both ends; `name` drops a path to its
+ * last segment (`group/service` → `service`), cut at the end if that still does not fit.
+ */
 export function fit(s: string, width: number, mode: FitMode = 'end'): string {
   if (displayWidth(s) <= width) return s
+  if (mode === 'name') return fit(s.slice(s.lastIndexOf('/') + 1), width)
   if (width <= 1) return width === 1 ? ELLIPSIS : ''
   const chars = [...s]
   if (mode === 'end') return take(chars, width - 1).join('') + ELLIPSIS
