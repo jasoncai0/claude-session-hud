@@ -647,9 +647,23 @@ let lastSaved = ''
 let foldedKeys: string[] = []
 /** The session's root (its first transcript row's uuid), per session id: a /clear goes on under another. */
 let rootCache: { id: string; root: string } | null = null
-/** Finds the session's transcript and prints its first row's uuid; nothing before the first row is written. */
-const ROOT_SCRIPT = `f=$(ls "$1"/projects/*/"$2".jsonl 2>/dev/null | head -n 1); [ -n "$f" ] && grep -m 1 -o '"uuid":"[0-9a-f-]*"' "$f"; exit 0`
-const ROOT_TIMEOUT_MS = 5_000
+/**
+ * Finds the session's transcript and prints its first row's uuid; nothing before the first row is written. A
+ * compaction can go on in a new transcript whose first row is the compact boundary: its `logicalParentUuid` is a row
+ * of the transcript it came from, found among the project's newest, whose root is printed instead (a few hops at most).
+ */
+const ROOT_SCRIPT = `f=$(ls "$1"/projects/*/"$2".jsonl 2>/dev/null | head -n 1); hops=0
+while [ -n "$f" ]; do
+  root=$(grep -m 1 -o '"uuid":"[0-9a-f-]*"' "$f")
+  parent=$(grep -m 1 '"uuid":' "$f" | grep '"subtype":"compact_boundary"' | grep -o '"logicalParentUuid":"[0-9a-f-]*"' | cut -d '"' -f 4)
+  [ -z "$parent" ] || [ "$hops" -ge 3 ] && break
+  hops=$((hops + 1)); from=$f; f=
+  for g in $(ls -t "$(dirname "$from")"/*.jsonl); do
+    [ "$g" != "$from" ] && grep -q -F "\"uuid\":\"$parent\"" "$g" && f=$g && break
+  done
+done
+[ -n "$root" ] && echo "$root"; exit 0`
+const ROOT_TIMEOUT_MS = 15_000
 
 /** The uuid of session `id`'s first transcript row: shared by every fork of it (a rewind or an edit in the desktop app). */
 async function readRoot($: EngineInterface, id: string): Promise<string | undefined> {
