@@ -72,6 +72,15 @@ test('triggerOf reads a direct release-stage execute call from its flags', () =>
   expect(triggerOne('Bash', { command: `${cmd} --cli-dry-run` }, '', false)).toBe(null)
 })
 
+test('triggersOf reads execute calls made through a shell function from the pipeline runs they printed', () => {
+  const cmd = 'trig(){ R=$(yx app-stack-execute-change-request-release-stage --app-name $app --release-workflow-sn $wf --release-stage-sn $st --params "$P"); echo "$app $br => $R"; }; '
+    + `trig demo-api ${WF} ${ST} main; trig billing-svc ${WF} ${ST} main`
+  const out = 'demo-api main => {"object": 444,"pipelineId": 3191562,"pipelineRunId": 444}\nbilling-svc main => {"object": 95,"pipelineId": 5077580,"pipelineRunId": 95}'
+  const runs = triggersOf('Bash', { command: cmd }, out, false)
+  expect(runs.map(r => [r.flowPipelineId, r.flowRunId, isUnnamed(r)])).toEqual([['3191562', '444', true], ['5077580', '95', true]])
+  expect(runs[0]?.url).toBe('https://flow.aliyun.com/pipelines/3191562/builds/444')
+})
+
 test('addRun puts the newest first and starts a re-triggered stage over', () => {
   const t = triggerOne('Bash', { command: CMD }, DEPLOY_OUT, false)
   if (!t) throw new Error('no trigger')

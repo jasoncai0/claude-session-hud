@@ -358,6 +358,7 @@ claude plugin test .
 
 ## 更新记录
 
+- **0.10.9**：修复用 shell 函数批量触发的发布（`trig(){ … --app-name $app … }; trig a …; trig b …`）不进 HUD：参数是变量时改从输出里的 `pipelineId` / `pipelineRunId` 识别每条运行，行名与 AppStack 链接随后从流水线补齐
 - **0.10.8**：MR 仓库列放不下时优先显示服务名（`ai-infra/agent-websocket` → `agent-we…`，而不是 `ai-infra…`），悬停仍显示完整路径
 - **0.10.7**：修复 Desktop 上 MR / 文档 / 发布行的 `×` 跑出 HUD 边框：去掉误用的 `role="dismiss"`（Desktop 会把它当作整个区域的关闭按钮画到最右侧），`×` 回到各自行内
 - **0.10.6**：Desktop 折叠按钮去掉文字，改为与终端一致的单字符 `▾` / `▸`，仍在第一行末尾

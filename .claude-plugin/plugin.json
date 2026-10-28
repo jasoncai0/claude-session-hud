@@ -1,6 +1,6 @@
 {
   "name": "session-hud",
-  "version": "0.10.8",
+  "version": "0.10.9",
   "description": "One HUD above the prompt: rate-limit usage, Codeup MRs and GitHub PRs, the session's Feishu docs and Yunxiao deploys; each module switchable, foldable",
   "author": {
     "name": "jasoncai0"

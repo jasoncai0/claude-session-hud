@@ -9,6 +9,8 @@ const DEPLOY_SH_RE = /\bdeploy\.sh\s+(\S+)\s+(\S+)(?:\s+([^\s-]\S*))?/g
 const FLOW_RUN_RE = /https:\/\/flow\.aliyun\.com\/pipelines\/(\d+)\/builds\/(\d+)/g
 const DRY_RUN_RE = /\s--(?:dry-run|cli-dry-run)\b/
 const EXECUTE_RE = /\bapp-stack-execute-change-request-release-stage\b/
+/** An execute call's answer, `{"object": 444, "pipelineId": 3191562, "pipelineRunId": 444}`, its keys in any order. */
+const JSON_OBJECT_RE = /\{[^{}]*\}/g
 /** An AppStack-made Flow pipeline's name: `<app>-<workflow>-<stage>`, e.g. `demo-api-标准发布流程-生产阶段`. */
 const PIPELINE_NAME_RE = /^(.+)-([^-]+)-([^-]+阶段[^-]*)$/
 /** How much earlier than the trigger an execution may start and still be its run (clock skew). */
@@ -68,7 +70,8 @@ const flowTarget = (pipelineId: string, runId: string, extra: Partial<DeployTarg
  * paired with the n-th stage page and the n-th `Flow run:` link in the output, and either link is enough. The env and
  * branch come from the call's words, or from its `Env:` / `Branch:` lines when it ran alone. A dry run (which still
  * prints links to existing runs) and a failed call never count. A direct
- * `app-stack-execute-change-request-release-stage` call counts by its flags.
+ * `app-stack-execute-change-request-release-stage` call counts by its flags, or, when they are variables, by the runs it
+ * printed.
  */
 export function triggersOf(tool: string, input: { command?: unknown }, output: string, isError: boolean): DeployTarget[] {
   const cmd = typeof input.command === 'string' ? input.command : ''
@@ -102,8 +105,20 @@ export function triggersOf(tool: string, input: { command?: unknown }, output: s
   const app = flagOf(cmd, 'app-name')
   const wf = flagOf(cmd, 'release-workflow-sn')
   const stage = flagOf(cmd, 'release-stage-sn')
-  return app && wf && stage ? [target(app, wf, stage, {})] : []
+  if (app && wf && stage) return [target(app, wf, stage, {})]
+  // Flags held in variables (a shell function called per app): the runs it printed say what was released.
+  return flowRunsOf(output).map(([pipelineId, runId]) => flowTarget(pipelineId, runId, {}))
 }
+
+const numberField = (json: string, field: string): string | undefined => json.match(new RegExp(`"${field}"\\s*:\\s*(\\d+)`))?.[1]
+
+/** Each `[pipelineId, pipelineRunId]` an execute call's output holds, in order. */
+const flowRunsOf = (output: string): [string, string][] =>
+  [...output.matchAll(JSON_OBJECT_RE)].flatMap(([json]) => {
+    const pipelineId = numberField(json, 'pipelineId')
+    const runId = numberField(json, 'pipelineRunId')
+    return pipelineId && runId ? [[pipelineId, runId] as [string, string]] : []
+  })
 
 /** Every AppStack stage page linked in `text`, deduped: what a pasted link asks to track. */
 export function findStageTargets(text: string): DeployTarget[] {
