@@ -61,9 +61,23 @@ test('triggersOf: a loop over one deploy.sh call counts its links; variable word
 test('triggerOf ignores dry runs, failures, other tools and unrelated commands', () => {
   // deploy.sh --dry-run still prints `Triggered.` and the latest existing run: the flag in the command decides.
   expect(triggerOne('Bash', { command: `${CMD} --dry-run` }, DEPLOY_OUT, false)).toBe(null)
-  expect(triggerOne('Bash', { command: CMD }, DEPLOY_OUT, true)).toBe(null)
+  expect(triggerOne('Bash', { command: CMD }, 'Exit code 1\nERROR: branch release/online not found', true)).toBe(null)
   expect(triggerOne('Read', { command: CMD }, DEPLOY_OUT, false)).toBe(null)
   expect(triggerOne('Bash', { command: 'cat deploy-log.tsv' }, URL, false)).toBe(null)
+})
+
+test('triggersOf keeps the releases a command triggered before a later part of it failed', () => {
+  // `deploy.sh … ; echo =====X; deploy.sh …` exits 1 at the echo under zsh, after the first release was triggered.
+  const cmd = `${CMD} | tail -15; echo =====PRE; bash deploy.sh demo-api pre release/pre --yes`
+  expect(triggerOne('Bash', { command: cmd }, `Exit code 1\n${DEPLOY_OUT}\n(eval):1: ====PRE not found`, true)).toMatchObject({
+    key: `demo-api/${ST}`, flowPipelineId: '1234567', flowRunId: '194',
+  })
+})
+
+test('triggersOf counts a failed execute call only by the run it printed', () => {
+  const cmd = `aliyun devops app-stack-execute-change-request-release-stage --app-name demo-api --release-workflow-sn ${WF} --release-stage-sn ${ST}`
+  expect(triggersOf('Bash', { command: cmd }, 'Exit code 1\nERROR: SDK.ServerError', true)).toEqual([])
+  expect(triggersOf('Bash', { command: cmd }, 'Exit code 1\n{"pipelineId": 1234567, "pipelineRunId": 9}', true).map(r => r.key)).toEqual([`demo-api/${ST}`])
 })
 
 test('triggerOf reads a direct release-stage execute call from its flags', () => {

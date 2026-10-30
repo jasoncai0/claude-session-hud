@@ -358,6 +358,7 @@ claude plugin test .
 
 ## 更新记录
 
+- **0.10.11**：修复同一条命令里先发布、后面某步报错（如 `deploy.sh …; echo =====X; deploy.sh …` 在 zsh 下退出码 1）时，已触发的发布不进 HUD；现在按输出里打印出的运行链接认，报错的直接 execute 调用只认它打印出的运行
 - **0.10.10**：修复上下文自动压缩后 HUD 被清空：Claude Code 2.1.309 起压缩可能换成新的会话 id，新记录的第一行是压缩边界，与原会话对不上；现在顺着它的 `logicalParentUuid` 找回原会话，恢复原来的 MR、文档和发布
 - **0.10.9**：修复用 shell 函数批量触发的发布（`trig(){ … --app-name $app … }; trig a …; trig b …`）不进 HUD：参数是变量时改从输出里的 `pipelineId` / `pipelineRunId` 识别每条运行，行名与 AppStack 链接随后从流水线补齐
 - **0.10.8**：MR 仓库列放不下时优先显示服务名（`ai-infra/agent-websocket` → `agent-we…`，而不是 `ai-infra…`），悬停仍显示完整路径

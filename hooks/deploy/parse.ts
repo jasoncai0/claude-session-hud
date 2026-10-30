@@ -69,13 +69,14 @@ const flowTarget = (pipelineId: string, runId: string, extra: Partial<DeployTarg
  * times (a loop, one call per region) and cut its output down (`| grep "Flow run"`): the n-th `deploy.sh` call is
  * paired with the n-th stage page and the n-th `Flow run:` link in the output, and either link is enough. The env and
  * branch come from the call's words, or from its `Env:` / `Branch:` lines when it ran alone. A dry run (which still
- * prints links to existing runs) and a failed call never count. A direct
- * `app-stack-execute-change-request-release-stage` call counts by its flags, or, when they are variables, by the runs it
- * printed.
+ * prints links to existing runs) never counts. A command that failed still counts the releases it printed: a later part
+ * of it may be what failed (`deploy.sh …; echo =====X; …` exits 1 under zsh), and deploy.sh prints links only once it
+ * triggered. A direct `app-stack-execute-change-request-release-stage` call counts by its flags, or, when they are
+ * variables or the call failed, by the runs it printed.
  */
 export function triggersOf(tool: string, input: { command?: unknown }, output: string, isError: boolean): DeployTarget[] {
   const cmd = typeof input.command === 'string' ? input.command : ''
-  if (tool !== 'Bash' || isError || !cmd || DRY_RUN_RE.test(cmd)) return []
+  if (tool !== 'Bash' || !cmd || DRY_RUN_RE.test(cmd)) return []
   const calls = [...cmd.matchAll(DEPLOY_SH_RE)]
   if (calls.length) {
     const stages = [...output.matchAll(STAGE_URLS_RE)]
@@ -105,9 +106,11 @@ export function triggersOf(tool: string, input: { command?: unknown }, output: s
   const app = flagOf(cmd, 'app-name')
   const wf = flagOf(cmd, 'release-workflow-sn')
   const stage = flagOf(cmd, 'release-stage-sn')
+  const runs = flowRunsOf(output)
+  if (isError && !runs.length) return []
   if (app && wf && stage) return [target(app, wf, stage, {})]
   // Flags held in variables (a shell function called per app): the runs it printed say what was released.
-  return flowRunsOf(output).map(([pipelineId, runId]) => flowTarget(pipelineId, runId, {}))
+  return runs.map(([pipelineId, runId]) => flowTarget(pipelineId, runId, {}))
 }
 
 const numberField = (json: string, field: string): string | undefined => json.match(new RegExp(`"${field}"\\s*:\\s*(\\d+)`))?.[1]
