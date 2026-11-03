@@ -19,7 +19,7 @@ import { compareRange, findPrLinks, parseGithubRemote, pickPrs, prQuery, prView,
 import type { ApiPr, GhRepo } from './mr/github'
 import { dirsOf, keepLastMrs, mrList, rememberDirs } from './mr/session'
 import { mrLayout, mrSection } from './mr/view'
-import { SNAPSHOT_PREFIX, archivedIdsOf, isEmpty, lineageOf, snapshotOf, staleKeys } from './persist'
+import { SNAPSHOT_PREFIX, archivedIdsOf, isEmpty, lineageOf, priorIdsOf, snapshotOf, staleKeys } from './persist'
 import type { Saved } from './persist'
 import { LIST_MAX, MODULE_IDS, PLUGIN, settingsOf } from './settings'
 import type { Settings } from './settings'
@@ -648,22 +648,12 @@ let foldedKeys: string[] = []
 /** The session's root (its first transcript row's uuid), per session id: a /clear goes on under another. */
 let rootCache: { id: string; root: string } | null = null
 /**
- * Finds the session's transcript and prints its first row's uuid; nothing before the first row is written. A
- * compaction can go on in a new transcript whose first row is the compact boundary: its `logicalParentUuid` is a row
- * of the transcript it came from, found among the project's newest, whose root is printed instead (a few hops at most).
+ * Finds the session's transcript and prints its first row's uuid; nothing before the first row is written. A session
+ * that went on under a new id after a compaction starts at the compact boundary instead: its earlier ids come from the
+ * desktop app (`priorSessions`), since following the boundary back means reading gigabytes of transcripts.
  */
-const ROOT_SCRIPT = `f=$(ls "$1"/projects/*/"$2".jsonl 2>/dev/null | head -n 1); hops=0
-while [ -n "$f" ]; do
-  root=$(grep -m 1 -o '"uuid":"[0-9a-f-]*"' "$f")
-  parent=$(grep -m 1 '"uuid":' "$f" | grep '"subtype":"compact_boundary"' | grep -o '"logicalParentUuid":"[0-9a-f-]*"' | cut -d '"' -f 4)
-  [ -z "$parent" ] || [ "$hops" -ge 3 ] && break
-  hops=$((hops + 1)); from=$f; f=
-  for g in $(ls -t "$(dirname "$from")"/*.jsonl); do
-    [ "$g" != "$from" ] && grep -q -F "\"uuid\":\"$parent\"" "$g" && f=$g && break
-  done
-done
-[ -n "$root" ] && echo "$root"; exit 0`
-const ROOT_TIMEOUT_MS = 15_000
+const ROOT_SCRIPT = `f=$(ls "$1"/projects/*/"$2".jsonl 2>/dev/null | head -n 1); [ -n "$f" ] && grep -m 1 -o '"uuid":"[0-9a-f-]*"' "$f"; exit 0`
+const ROOT_TIMEOUT_MS = 5_000
 
 /** The uuid of session `id`'s first transcript row: shared by every fork of it (a rewind or an edit in the desktop app). */
 async function readRoot($: EngineInterface, id: string): Promise<string | undefined> {
@@ -701,13 +691,27 @@ const ARCHIVED_TIMEOUT_MS = 10_000
 /**
  * The sessions archived in the desktop app. The app tells a plugin nothing when a session is archived (its process just
  * ends), so its own session files are read. ponytail: reads the app's internal metadata; if its layout changes this
- * finds nothing and the 30-session / 30-day cap still bounds the store.
+ * finds nothing and the 200-session / 30-day cap still bounds the store.
  */
 async function archivedSessions($: EngineInterface): Promise<Set<string>> {
   const home = await $.env.get('HOME')
   if (!home) return new Set()
   const run = await $.process.run(['/bin/sh', '-c', ARCHIVED_SCRIPT, 'sh', `${home}/${DESKTOP_SESSIONS}`], { timeoutMs: ARCHIVED_TIMEOUT_MS })
   return archivedIdsOf(run.stdout)
+}
+
+/** Prints the `priorCliSessionIds` of the desktop session now running CLI session `$2`. No backslash: in this template literal `\"` is a bare quote. */
+const PRIOR_SCRIPT = `f=$(grep -rl --include='local_*.json' -F '"cliSessionId":"'"$2"'"' "$1" 2>/dev/null | head -n 1); [ -n "$f" ] && grep -o '"priorCliSessionIds":[^]]*' "$f"; exit 0`
+
+/**
+ * The ids session `id` had before: the desktop app lists them as it goes on under a new id (a compaction, a rewind).
+ * ponytail: the app's internal metadata; outside it (or if its layout changes) only forks are found, by their root.
+ */
+async function priorSessions($: EngineInterface, id: string): Promise<string[]> {
+  const home = await $.env.get('HOME')
+  if (!home) return []
+  const run = await $.process.run(['/bin/sh', '-c', PRIOR_SCRIPT, 'sh', `${home}/${DESKTOP_SESSIONS}`, id], { timeoutMs: ARCHIVED_TIMEOUT_MS })
+  return priorIdsOf(run.stdout).filter(prior => prior !== id)
 }
 
 /** Drops archived sessions' snapshots and those past the newest kept or a month old; `isFull` keeps fewer, to make room. */
@@ -740,8 +744,9 @@ async function saveSession($: EngineInterface) {
 
 /**
  * Puts the session's snapshot back when the host holds nothing for it: a fresh process resuming the session. A hot
- * reload finds the host's values and keeps them. A fork (a rewind or an edit in the desktop app goes on under a new
- * session id) finds the snapshots of the session it came from by their shared root, and takes them over.
+ * reload finds the host's values and keeps them. A session that goes on under a new id takes over the snapshots of
+ * the one it came from: a fork (a rewind or an edit) found by their shared root, a compaction by the desktop app's
+ * list of the ids the session had before.
  */
 async function restoreSession($: EngineInterface) {
   const now = await savedOf($)
@@ -760,7 +765,8 @@ async function restoreSession($: EngineInterface) {
     const its = await readRoot($, key.slice(SNAPSHOT_PREFIX.length)).catch(() => undefined)
     return [{ key, snap: its ? { ...snap, root: its } : snap }]
   }))).flat()
-  const lineage = lineageOf(entries, ownKey, root)
+  const priorKeys = (await priorSessions($, id).catch(() => [])).map(prior => `${SNAPSHOT_PREFIX}${prior}`)
+  const lineage = lineageOf(entries, ownKey, root, priorKeys)
   if (!lineage) return
   const s = lineage.state
   await update($, mrDirs, () => s.mrDirs)

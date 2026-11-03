@@ -27,10 +27,13 @@ export type Saved = {
 export type Snapshot = { savedAt: number; root?: string; state: Saved }
 
 export const SNAPSHOT_PREFIX = 'session:'
-/** Sessions kept in the store, newest first; the store's whole file is capped at 4 MiB. */
-const KEPT_SESSIONS = 30
+/**
+ * Sessions kept in the store, newest first. A snapshot is a few KiB and the store's whole file is capped at 4 MiB; a
+ * busy day opens dozens of sessions, and a session left idle since yesterday must outlast them.
+ */
+const KEPT_SESSIONS = 200
 /** When the store is full, how many of the newest to keep. */
-const KEPT_WHEN_FULL = 10
+const KEPT_WHEN_FULL = 50
 const MAX_AGE_MS = 30 * 24 * 60 * 60_000
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
@@ -84,15 +87,23 @@ export function mergeSaved(newer: Saved, older: Saved): Saved {
   }
 }
 
-/** The snapshots of one lineage (same `root`, or the session's own key), newest first, folded into one. */
-export function lineageOf(entries: readonly { key: string; snap: Snapshot }[], ownKey: string, root: string | undefined): { state: Saved; keys: string[] } | null {
-  const mine = entries.filter(e => e.key === ownKey || (root !== undefined && e.snap.root === root)).sort((a, b) => b.snap.savedAt - a.snap.savedAt)
+/**
+ * The snapshots of one lineage, newest first, folded into one: the session's own key, the keys of the ids it had before
+ * (`priorKeys`), and any of the same `root` (its forks).
+ */
+export function lineageOf(entries: readonly { key: string; snap: Snapshot }[], ownKey: string, root: string | undefined, priorKeys: readonly string[] = []): { state: Saved; keys: string[] } | null {
+  const isMine = (e: { key: string; snap: Snapshot }) => e.key === ownKey || priorKeys.includes(e.key) || (root !== undefined && e.snap.root === root)
+  const mine = entries.filter(isMine).sort((a, b) => b.snap.savedAt - a.snap.savedAt)
   const [first, ...rest] = mine
   if (!first) return null
   return { state: rest.reduce((acc, e) => mergeSaved(acc, e.snap.state), first.snap.state), keys: mine.map(e => e.key) }
 }
 
 const CLI_SESSION_RE = /"cliSessionId"\s*:\s*"([\w-]+)"/g
+const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g
+
+/** The CLI session ids in the desktop app's `"priorCliSessionIds":[…` of a session: those it had before. */
+export const priorIdsOf = (text: string): string[] => text.match(UUID_RE) ?? []
 
 /** The CLI session ids in the desktop app's metadata of its archived sessions (`"cliSessionId":"…"` lines). */
 export const archivedIdsOf = (text: string): Set<string> => new Set([...text.matchAll(CLI_SESSION_RE)].flatMap(m => (m[1] ? [m[1]] : [])))

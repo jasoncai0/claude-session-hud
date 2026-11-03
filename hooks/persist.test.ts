@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { archivedIdsOf, isEmpty, lineageOf, mergeSaved, snapshotOf, staleKeys } from './persist'
+import { archivedIdsOf, isEmpty, lineageOf, mergeSaved, priorIdsOf, snapshotOf, staleKeys } from './persist'
 import type { Saved } from './persist'
 
 const DAY = 24 * 60 * 60_000
@@ -25,11 +25,12 @@ test('snapshotOf reads a stored snapshot back, dropping malformed entries; anyth
   expect(isEmpty(snapshotOf({ savedAt: 1, state: {} })?.state ?? ({} as never))).toBe(true)
 })
 
-test('staleKeys keeps the 30 newest within 30 days, or the 10 newest when the store is full', () => {
+test('staleKeys keeps the 200 newest within 30 days, or the 50 newest when the store is full', () => {
   const now = 100 * DAY
-  const saved = Array.from({ length: 35 }, (_, i) => ({ key: `s${i}`, savedAt: now - i * 60_000 }))
-  expect(staleKeys(saved, now)).toEqual(['s30', 's31', 's32', 's33', 's34'])
-  expect(staleKeys(saved, now, true)).toHaveLength(25)
+  // A day of 40 sessions must not push out one left idle since yesterday.
+  const saved = Array.from({ length: 205 }, (_, i) => ({ key: `s${i}`, savedAt: now - i * 60_000 }))
+  expect(staleKeys(saved, now)).toEqual(['s200', 's201', 's202', 's203', 's204'])
+  expect(staleKeys(saved, now, true)).toHaveLength(155)
   expect(staleKeys([{ key: 'old', savedAt: now - 31 * DAY }, { key: 'new', savedAt: now }], now)).toEqual(['old'])
 })
 
@@ -64,6 +65,23 @@ test('lineageOf folds the session\'s own snapshot with its forks\' by root, newe
   expect(lineageOf(entries, 'session:new', 'r1')?.keys).toEqual(['session:me', 'session:old'])
   expect(lineageOf(entries, 'session:me', undefined)?.keys).toEqual(['session:me'])
   expect(lineageOf(entries, 'session:none', undefined)).toBe(null)
+})
+
+test('lineageOf also folds the snapshots of the ids the session had before, whatever their root', () => {
+  // A compaction goes on under a new id whose transcript starts at the compact boundary: another root.
+  const snap = (savedAt: number, root: string, dirs: string[]) => ({ savedAt, root, state: { ...EMPTY, mrDirs: dirs } })
+  const entries = [
+    { key: 'session:before', snap: snap(1, 'r0', ['/before']) },
+    { key: 'session:x', snap: snap(9, 'r2', ['/x']) },
+  ]
+  expect(lineageOf(entries, 'session:now', 'r1', ['session:before'])).toEqual({ state: { ...EMPTY, mrDirs: ['/before'] }, keys: ['session:before'] })
+  expect(lineageOf(entries, 'session:now', 'r1')).toBe(null)
+})
+
+test('priorIdsOf reads the ids a desktop session had before from its metadata', () => {
+  const meta = '"priorCliSessionIds":["9edc17ac-c07c-445b-81a3-1af95da19469","79e2aa0d-f1f8-4539-90a1-0e0d5ac7f7d0"'
+  expect(priorIdsOf(meta)).toEqual(['9edc17ac-c07c-445b-81a3-1af95da19469', '79e2aa0d-f1f8-4539-90a1-0e0d5ac7f7d0'])
+  expect(priorIdsOf('')).toEqual([])
 })
 
 test('mergeSaved keeps a doc 创建 when the older side made it and the newer only mentioned it', () => {
